@@ -1,6 +1,6 @@
 import json
 import os
-from math import floor
+from math import floor, inf
 
 from lib.algorithm import Algorithm
 from lib.item import Item
@@ -19,8 +19,9 @@ class AddonDataAlgorithm(Algorithm):
 
         self._bonuses = data['bonuses']
         self._curves = data['curves']
-        self._squish_curve = data['squish_curve']
-        self._squish_keys = sorted(float(k) for k in self._squish_curve)
+        self._squish_curve_index = data['squish_curve']
+        squish_curve = self._curves[self._squish_curve_index]
+        self._squish_max = max(float(k) for k in squish_curve)
         self._content_tuning = data['content_tuning']
         # Expand CT remap: add entries pointing non-canonical IDs to canonical data
         for src, dst in data.get('ct_remap', {}).items():
@@ -60,8 +61,8 @@ class AddonDataAlgorithm(Algorithm):
             if not data or 'redirect' in data:
                 return
             collect_bonus(data)
-            if 'then' in data:
-                collect_bonus(data['then'])
+            if 'other' in data:
+                collect_bonus(data['other'])
 
         # Collect indirect entries first, then direct (direct overrides via dedup)
         for bonus_id in bonus_ids:
@@ -125,35 +126,29 @@ class AddonDataAlgorithm(Algorithm):
         return self._interpolate(points, value)
 
     def _get_squish_value(self, value: float) -> int:
-        points = self._squish_curve
-        keys = self._squish_keys
-        # Above max → 1
-        if value > keys[-1]:
+        if value > self._squish_max:
             return 1
-        return self._interpolate(points, value)
+        return self._get_curve_value(self._squish_curve_index, value)
 
     @staticmethod
-    def _interpolate(points: dict, value: float) -> int:
-        pairs = sorted(((float(k), v) for k, v in points.items()), key=lambda p: p[0])
-        # Find lower (last x <= value) and upper (first x >= value)
-        lower = upper = None
-        for p in reversed(pairs):
-            if p[0] <= value:
-                lower = p
-                break
-        for p in pairs:
-            if p[0] >= value:
-                upper = p
-                break
-        lower = lower or upper
-        upper = upper or lower
-        if lower[0] >= value:
-            result = lower[1]
-        elif upper[0] < value:
-            result = upper[1]
-        else:
-            slope = (upper[1] - lower[1]) / (upper[0] - lower[0])
-            result = lower[1] + slope * (value - lower[0])
+    def _interpolate(curve: dict, value: float) -> int:
+        lower_x, lower_y = -inf, 0
+        upper_x, upper_y = inf, 0
+        for k, v in curve.items():
+            level = float(k)
+            if level == value:
+                return int(floor(v + 0.5))
+            elif level < value:
+                if level > lower_x:
+                    lower_x, lower_y = level, v
+            else:
+                if level < upper_x:
+                    upper_x, upper_y = level, v
+        if lower_x == -inf:
+            return int(floor(upper_y + 0.5))
+        if upper_x == inf:
+            return int(floor(lower_y + 0.5))
+        result = lower_y + (value - lower_x) / (upper_x - lower_x) * (upper_y - lower_y)
         return int(floor(result + 0.5))
 
     def _get_midnight_squish_curve_point_value(self, value: float) -> int:

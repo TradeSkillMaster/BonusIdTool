@@ -3,7 +3,9 @@
 import argparse
 from dataclasses import dataclass
 import logging
+import os
 import re
+import subprocess
 from typing import Self
 
 from lib.algorithm import Algorithm
@@ -67,6 +69,28 @@ class GameTestLink:
         return result
 
 
+class LuaAlgorithm(Algorithm):
+    def __init__(self, dbc: DBC, build: str):
+        self._dbc = dbc
+        lua_data_path = os.path.join('.cache', build, 'addon_data.lua')
+        self._proc = subprocess.Popen(
+            ['lua', 'lua/test_runner.lua', lua_data_path],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+
+    def process_item(self, link: str) -> int:
+        base_item_level, has_midnight_scaling = self._dbc.item_sparse.get_info(self.get_item_id_from_link(link))
+        line = f"{link}\t{base_item_level}\t{1 if has_midnight_scaling else 0}\n"
+        self._proc.stdin.write(line)
+        self._proc.stdin.flush()
+        return int(self._proc.stdout.readline().strip())
+
+    def close(self):
+        self._proc.stdin.close()
+        self._proc.wait()
+
+
 class Test:
     def __init__(self, build: str):
         self._build = build
@@ -82,6 +106,12 @@ class Test:
             logging.info("Testing addon data algorithm...")
             addon_algorithm = AddonDataAlgorithm(self._dbc, self._build)
             self._test_algorithm(addon_algorithm)
+
+        if 'lua' in algorithms:
+            logging.info("Testing Lua algorithm...")
+            lua_algorithm = LuaAlgorithm(self._dbc, self._build)
+            self._test_algorithm(lua_algorithm)
+            lua_algorithm.close()
 
     def _test_algorithm(self, algorithm: Algorithm):
         logging.info("Checking single bonus ID test data...")
@@ -116,8 +146,8 @@ class Test:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Test item level algorithms against game data')
     parser.add_argument('build', help='Game build version (e.g. 12.0.1.65893)')
-    parser.add_argument('-a', '--algorithm', choices=['dbc', 'addon', 'both'], default='both',
-                        help='Which algorithm to test (default: both)')
+    parser.add_argument('-a', '--algorithm', choices=['dbc', 'addon', 'lua', 'all'], default='all',
+                        help='Which algorithm to test (default: all)')
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -126,6 +156,6 @@ if __name__ == '__main__':
         datefmt = '%H:%M:%S'
     )
 
-    algorithms = ['dbc', 'addon'] if args.algorithm == 'both' else [args.algorithm]
+    algorithms = ['dbc', 'addon', 'lua'] if args.algorithm == 'all' else [args.algorithm]
     test = Test(args.build)
     test.main(algorithms)

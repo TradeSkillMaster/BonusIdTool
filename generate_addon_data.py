@@ -8,6 +8,259 @@ from math import floor
 
 from lib.dbc_file import CurveType, DBC, ItemBonusType
 
+_LUA_KEYWORDS = frozenset({
+    'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for',
+    'function', 'goto', 'if', 'in', 'local', 'nil', 'not', 'or',
+    'repeat', 'return', 'then', 'true', 'until', 'while',
+})
+
+
+def _lua_key(k):
+    """Format a Python dict key as a Lua table key."""
+    if isinstance(k, int):
+        return f'[{k}]'
+    if isinstance(k, str):
+        # Numeric string keys → number keys
+        try:
+            return f'[{int(k)}]'
+        except ValueError:
+            try:
+                return f'[{float(k)}]'
+            except ValueError:
+                pass
+        if k.isidentifier() and k not in _LUA_KEYWORDS:
+            return k
+    return f'["{k}"]'
+
+
+def _lua_value(val):
+    """Serialize a Python value to compact inline Lua."""
+    if isinstance(val, bool):
+        return 'true' if val else 'false'
+    if isinstance(val, int):
+        return str(val)
+    if isinstance(val, float):
+        return str(int(val)) if val == int(val) else str(val)
+    if isinstance(val, str):
+        return f'"{val}"'
+    if isinstance(val, list):
+        return '{' + ', '.join(_lua_value(v) for v in val) + '}'
+    if isinstance(val, dict):
+        parts = []
+        for k, v in val.items():
+            lk = _lua_key(k)
+            lv = _lua_value(v)
+            if lk.startswith('['):
+                parts.append(f'{lk}={lv}')
+            else:
+                parts.append(f'{lk}={lv}')
+        return '{' + ', '.join(parts) + '}'
+    raise TypeError(f"Cannot serialize {type(val)} to Lua")
+
+
+def _find_diffs(a, b, path=()):
+    """Find leaf-level differences between two nested structures."""
+    if type(a) != type(b):
+        return [(path, a, b)]
+    if isinstance(a, dict):
+        if set(a.keys()) != set(b.keys()):
+            return [(path, a, b)]
+        diffs = []
+        for k in sorted(a.keys()):
+            diffs.extend(_find_diffs(a[k], b[k], path + (k,)))
+        return diffs
+    if isinstance(a, list):
+        if len(a) != len(b):
+            return [(path, a, b)]
+        diffs = []
+        for i in range(len(a)):
+            diffs.extend(_find_diffs(a[i], b[i], path + (i,)))
+        return diffs
+    if a != b:
+        return [(path, a, b)]
+    return []
+
+
+def _lua_expr(slope, intercept):
+    """Format slope*i + intercept as a Lua expression."""
+    if slope == 1:
+        if intercept == 0:
+            return 'i'
+        return f'i+{intercept}' if intercept > 0 else f'i-{-intercept}'
+    if slope == -1:
+        return f'{intercept}-i' if intercept != 0 else '-i'
+    base = f'{slope}*i'
+    if intercept == 0:
+        return base
+    return f'{base}+{intercept}' if intercept > 0 else f'{base}-{-intercept}'
+
+
+def _lua_value_with_subs(val, subs, path=()):
+    """Serialize a value to Lua, substituting linear expressions at given paths."""
+    if path in subs:
+        return _lua_expr(*subs[path])
+    if isinstance(val, bool):
+        return 'true' if val else 'false'
+    if isinstance(val, int):
+        return str(val)
+    if isinstance(val, float):
+        return str(int(val)) if val == int(val) else str(val)
+    if isinstance(val, str):
+        return f'"{val}"'
+    if isinstance(val, list):
+        return '{' + ', '.join(_lua_value_with_subs(v, subs, path + (i,)) for i, v in enumerate(val)) + '}'
+    if isinstance(val, dict):
+        parts = []
+        for k, v in val.items():
+            lk = _lua_key(k)
+            lv = _lua_value_with_subs(v, subs, path + (k,))
+            parts.append(f'{lk}={lv}')
+        return '{' + ', '.join(parts) + '}'
+    raise TypeError(f"Cannot serialize {type(val)} to Lua")
+
+
+def _is_numeric(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _find_runs(entries, min_run=3):
+    """Find compressible runs in sorted (int_id, value) pairs.
+
+    Returns list of segments:
+    - ('single', id, value)
+    - ('run', start_id, end_id, base_value, {path: (slope, intercept)})
+    """
+    segments = []
+    i = 0
+    n = len(entries)
+
+    while i < n:
+        bid_start, val_start = entries[i]
+        j = i + 1
+        varying = None
+
+        while j < n:
+            bid_cur, val_cur = entries[j]
+            if bid_cur != bid_start + (j - i):
+                break
+
+            diffs = _find_diffs(val_start, val_cur)
+
+            if j == i + 1:
+                # First pair — establish pattern
+                if not all(_is_numeric(d[1]) and _is_numeric(d[2]) for d in diffs):
+                    break
+                varying = {}
+                ok = True
+                for p, v1, v2 in diffs:
+                    slope = v2 - v1
+                    if slope != int(slope):
+                        ok = False
+                        break
+                    slope = int(slope)
+                    intercept = v1 - slope * bid_start
+                    if intercept != int(intercept):
+                        ok = False
+                        break
+                    varying[p] = (int(slope), int(intercept))
+                if not ok:
+                    varying = None
+                    break
+            else:
+                # Verify pattern holds
+                if len(diffs) != len(varying):
+                    break
+                ok = True
+                for p, _, v_cur in diffs:
+                    if p not in varying:
+                        ok = False
+                        break
+                    slope, intercept = varying[p]
+                    if v_cur != slope * bid_cur + intercept:
+                        ok = False
+                        break
+                if not ok:
+                    break
+            j += 1
+
+        run_len = j - i
+        if run_len >= min_run:
+            segments.append(('run', bid_start, bid_start + run_len - 1,
+                             val_start, varying or {}))
+            i = j
+        else:
+            segments.append(('single', entries[i][0], entries[i][1]))
+            i += 1
+
+    return segments
+
+
+def _write_lua(addon_data, path):
+    """Write addon data as a Lua file with loop compression."""
+    lines = []
+
+    # Bonuses (compressed with loops)
+    sorted_bonus_ids = sorted(addon_data['bonuses'].keys(), key=int)
+    bonus_entries = [(int(k), addon_data['bonuses'][k]) for k in sorted_bonus_ids]
+    bonus_segments = _find_runs(bonus_entries)
+
+    lines.append('local bonuses, ct_remap')
+    lines.append('do')
+
+    lines.append('\tbonuses = {}')
+    for seg in bonus_segments:
+        if seg[0] == 'single':
+            _, bid, val = seg
+            lines.append(f'\tbonuses[{bid}] = {_lua_value(val)}')
+        else:
+            _, start, end, base_val, varying = seg
+            template = _lua_value_with_subs(base_val, varying)
+            lines.append(f'\tfor i = {start}, {end} do bonuses[i] = {template} end')
+
+    # CT remap (compressed with loops)
+    ct_remap = addon_data.get('ct_remap', {})
+    if ct_remap:
+        sorted_ct_keys = sorted(ct_remap.keys())
+        ct_entries = [(int(k), ct_remap[k]) for k in sorted_ct_keys]
+        ct_segments = _find_runs(ct_entries)
+
+        lines.append('\tct_remap = {}')
+        for seg in ct_segments:
+            if seg[0] == 'single':
+                _, src, dst = seg
+                lines.append(f'\tct_remap[{src}] = {dst}')
+            else:
+                _, start, end, base_val, varying = seg
+                template = _lua_value_with_subs(base_val, varying)
+                lines.append(f'\tfor i = {start}, {end} do ct_remap[i] = {template} end')
+
+    lines.append('end')
+
+    # Return data table
+    lines.append('return {')
+    lines.append(f'\tsquish_curve = {addon_data["squish_curve"]},')
+    lines.append('\tbonuses = bonuses,')
+
+    # Curves (inline)
+    lines.append('\tcurves = {')
+    for curve in addon_data['curves']:
+        lines.append('\t\t' + _lua_value(curve) + ',')
+    lines.append('\t},')
+
+    # Content tuning (inline)
+    lines.append('\tcontent_tuning = {')
+    for k in sorted(addon_data['content_tuning'].keys(), key=int):
+        lines.append(f'\t\t[{k}] = {_lua_value(addon_data["content_tuning"][k])},')
+    lines.append('\t},')
+
+    if ct_remap:
+        lines.append('\tct_remap = ct_remap,')
+
+    lines.append('}')
+
+    with open(path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+
 
 def _sort_priority(bonus_type):
     if bonus_type in (ItemBonusType.STAT_SCALING, ItemBonusType.STAT_FIXED):
@@ -212,7 +465,7 @@ if __name__ == '__main__':
         if indirect:
             data['indirect'] = True
         if len(ops) > 1:
-            data['then'] = ops[1]
+            data['other'] = ops[1]
         bonuses[str(parent_id)] = data
 
     # Collect all referenced curve IDs (for curves still needed at runtime)
@@ -246,14 +499,9 @@ if __name__ == '__main__':
     # Export raw curve points
     curves = {}
     for curve_id in sorted(referenced_curve_ids):
-        if curve_id == squish_curve_id:
-            continue  # squish curve stored separately
         points = _export_curve_points(dbc, curve_id)
         if points:
             curves[str(curve_id)] = points
-
-    # Squish curve (separate, with special out-of-range handling)
-    squish_curve = _export_curve_points(dbc, squish_curve_id)
 
     # Simplify scale ops with constant curves into set ops
     constant_curves = {cid: next(iter(pts.values()))
@@ -277,20 +525,21 @@ if __name__ == '__main__':
             continue
         simplified = _simplify_scale(bonus)
         if simplified is not bonus:
-            for key in ('sp', 'indirect', 'then'):
+            for key in ('sp', 'indirect', 'other'):
                 if key in bonus:
                     simplified[key] = bonus[key]
             bonuses[bid] = simplified
-        if 'then' in bonuses[bid]:
-            bonuses[bid]['then'] = _simplify_scale(bonuses[bid]['then'])
+        if 'other' in bonuses[bid]:
+            bonuses[bid]['other'] = _simplify_scale(bonuses[bid]['other'])
 
     # Remove curves no longer referenced by any bonus
     still_referenced = set()
     for bonus in bonuses.values():
         if bonus.get('op') == 'scale':
             still_referenced.add(str(bonus['curve_id']))
-        if isinstance(bonus.get('then'), dict) and bonus['then'].get('op') == 'scale':
-            still_referenced.add(str(bonus['then']['curve_id']))
+        if isinstance(bonus.get('other'), dict) and bonus['other'].get('op') == 'scale':
+            still_referenced.add(str(bonus['other']['curve_id']))
+    still_referenced.add(str(squish_curve_id))
     curves = {k: v for k, v in curves.items() if k in still_referenced}
 
     # Dedup curves and convert to array with index-based references
@@ -317,8 +566,10 @@ if __name__ == '__main__':
         if 'redirect' in bonus:
             continue
         _remap_curve(bonus)
-        if isinstance(bonus.get('then'), dict):
-            _remap_curve(bonus['then'])
+        if isinstance(bonus.get('other'), dict):
+            _remap_curve(bonus['other'])
+
+    squish_curve_index = curve_index_map[str(squish_curve_id)]
 
     curves = curves_list
     logging.info("Curves: %d unique curves (%d total points)",
@@ -450,7 +701,7 @@ if __name__ == '__main__':
         for bonus in bonuses.values():
             if 'redirect' in bonus:
                 continue
-            for b in [bonus] + ([bonus['then']] if isinstance(bonus.get('then'), dict) else []):
+            for b in [bonus] + ([bonus['other']] if isinstance(bonus.get('other'), dict) else []):
                 if 'ct_id' in b:
                     ct_str = str(b['ct_id'])
                     if ct_str in ct_remap:
@@ -470,7 +721,7 @@ if __name__ == '__main__':
     # Assemble and write
     addon_data = {
         "build": build,
-        "squish_curve": squish_curve,
+        "squish_curve": squish_curve_index,
         "bonuses": bonuses,
         "curves": curves,
         "content_tuning": content_tuning,
@@ -482,9 +733,12 @@ if __name__ == '__main__':
     with open(output_path, 'w') as f:
         json.dump(addon_data, f, indent=2)
 
-    logging.info("Wrote addon data to %s", output_path)
+    lua_path = os.path.join('.cache', build, 'addon_data.lua')
+    _write_lua(addon_data, lua_path)
+
+    logging.info("Wrote addon data to %s and %s", output_path, lua_path)
     logging.info("Bonuses: %d bonus list IDs", len(bonuses))
     logging.info("Curves: %d curves (%d total points)",
                  len(curves), sum(len(v) for v in curves))
-    logging.info("Squish curve: %d points", len(squish_curve))
+    logging.info("Squish curve: index %d", squish_curve_index)
     logging.info("Content tuning: %d entries", len(content_tuning))
