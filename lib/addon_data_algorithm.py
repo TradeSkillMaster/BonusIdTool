@@ -61,8 +61,6 @@ class AddonDataAlgorithm(Algorithm):
             if not data or 'redirect' in data:
                 return
             collect_bonus(data)
-            if 'other' in data:
-                collect_bonus(data['other'])
 
         # Collect indirect entries first, then direct (direct overrides via dedup)
         for bonus_id in bonus_ids:
@@ -97,6 +95,9 @@ class AddonDataAlgorithm(Algorithm):
                     if ct and (not bonus.get('content_tuning_default_only') or not item.modifier_player_level):
                         drop_level = self._apply_content_tuning(drop_level, ct, bonus['content_tuning_key'])
                 item.item_level = self._get_curve_value(bonus['curve_id'], drop_level) + bonus.get('offset', 0)
+
+            if 'extra_amount' in bonus:
+                item.item_level += bonus['extra_amount']
 
             # Unified post-op midnight handling
             midnight = bonus.get('midnight')

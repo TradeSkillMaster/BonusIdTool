@@ -211,7 +211,7 @@ def _write_lua(addon_data, path):
     bonus_entries = [(int(k), addon_data['bonuses'][k]) for k in sorted_bonus_ids]
     bonus_segments = _find_runs(bonus_entries)
 
-    lines.append('local bonuses, contentTuningRemap')
+    lines.append('local bonuses, contentTuning')
     lines.append('do')
 
     lines.append('\tbonuses = {}')
@@ -224,45 +224,45 @@ def _write_lua(addon_data, path):
             template = _lua_value_with_subs(base_val, varying)
             lines.append(f'\tfor i = {start}, {end} do bonuses[i] = {template} end')
 
-    # CT remap (compressed with loops)
+    # Content tuning
+    lines.append('\tcontentTuning = {')
+    for k in sorted(addon_data['content_tuning'].keys(), key=int):
+        lines.append(f'\t\t[{k}] = {_lua_value(addon_data["content_tuning"][k])},')
+    lines.append('\t}')
+
+    # CT remap (inline assignments into contentTuning)
     ct_remap = addon_data.get('content_tuning_remap', {})
     if ct_remap:
         sorted_ct_keys = sorted(ct_remap.keys())
         ct_entries = [(int(k), ct_remap[k]) for k in sorted_ct_keys]
         ct_segments = _find_runs(ct_entries)
 
-        lines.append('\tcontentTuningRemap = {}')
         for seg in ct_segments:
             if seg[0] == 'single':
                 _, src, dst = seg
-                lines.append(f'\tcontentTuningRemap[{src}] = {dst}')
+                lines.append(f'\tcontentTuning[{src}] = contentTuning[{dst}]')
             else:
                 _, start, end, base_val, varying = seg
                 template = _lua_value_with_subs(base_val, varying)
-                lines.append(f'\tfor i = {start}, {end} do contentTuningRemap[i] = {template} end')
+                lines.append(f'\tfor i = {start}, {end} do contentTuning[i] = contentTuning[{template}] end')
 
     lines.append('end')
 
+    # Curves
+    lines.append('local curves = {')
+    for curve in addon_data['curves']:
+        lines.append('\t' + _lua_value(curve) + ',')
+    lines.append('}')
+
+    squish_index = addon_data["squish_curve"]
+    lines.append(f'local squishCurve = curves[{squish_index + 1}]')
+
     # Return data table
     lines.append('return {')
-    lines.append(f'\tsquishCurve = {addon_data["squish_curve"]},')
+    lines.append('\tsquishCurve = squishCurve,')
     lines.append('\tbonuses = bonuses,')
-
-    # Curves (inline)
-    lines.append('\tcurves = {')
-    for curve in addon_data['curves']:
-        lines.append('\t\t' + _lua_value(curve) + ',')
-    lines.append('\t},')
-
-    # Content tuning (inline)
-    lines.append('\tcontentTuning = {')
-    for k in sorted(addon_data['content_tuning'].keys(), key=int):
-        lines.append(f'\t\t[{k}] = {_lua_value(addon_data["content_tuning"][k])},')
-    lines.append('\t},')
-
-    if ct_remap:
-        lines.append('\tcontentTuningRemap = contentTuningRemap,')
-
+    lines.append('\tcurves = curves,')
+    lines.append('\tcontentTuning = contentTuning,')
     lines.append('}')
 
     with open(path, 'w') as f:
@@ -472,7 +472,9 @@ if __name__ == '__main__':
         if indirect:
             data['indirect'] = True
         if len(ops) > 1:
-            data['other'] = ops[1]
+            other = ops[1]
+            assert other['op'] == 'add', f"Unexpected other op: {other['op']} for bonus {parent_id}"
+            data['extra_amount'] = other['amount']
         bonuses[str(parent_id)] = data
 
     # Collect all referenced curve IDs (for curves still needed at runtime)
@@ -532,20 +534,16 @@ if __name__ == '__main__':
             continue
         simplified = _simplify_scale(bonus)
         if simplified is not bonus:
-            for key in ('sort_priority', 'indirect', 'other'):
+            for key in ('sort_priority', 'indirect', 'extra_amount'):
                 if key in bonus:
                     simplified[key] = bonus[key]
             bonuses[bid] = simplified
-        if 'other' in bonuses[bid]:
-            bonuses[bid]['other'] = _simplify_scale(bonuses[bid]['other'])
 
     # Remove curves no longer referenced by any bonus
     still_referenced = set()
     for bonus in bonuses.values():
         if bonus.get('op') == 'scale':
             still_referenced.add(str(bonus['curve_id']))
-        if isinstance(bonus.get('other'), dict) and bonus['other'].get('op') == 'scale':
-            still_referenced.add(str(bonus['other']['curve_id']))
     still_referenced.add(str(squish_curve_id))
     curves = {k: v for k, v in curves.items() if k in still_referenced}
 
@@ -573,8 +571,6 @@ if __name__ == '__main__':
         if 'redirect' in bonus:
             continue
         _remap_curve(bonus)
-        if isinstance(bonus.get('other'), dict):
-            _remap_curve(bonus['other'])
 
     squish_curve_index = curve_index_map[str(squish_curve_id)]
 

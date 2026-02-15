@@ -1,284 +1,259 @@
-local floor = math.floor
-local min = math.min
-local max = math.max
-local sort = table.sort
-local tinsert = table.insert
+local BonusIdAlgorithm = {}
+select(2, ...).BonusIdAlgorithm = BonusIdAlgorithm
+local BonusId = nil
+local private = {
+	squishMax = -math.huge,
+	contentTuning = nil,
+	allPartsTemp = {},
+	partsTemp = {},
+	bonusIdsTemp = {},
+	collectedTemp = {},
+}
+local OP_GROUP = { scale = "level", set = "level", add = "add" }
+local DEFAULT_DROP_LEVEL = 80
 
-local OP_GROUP = { scale = "S", set = "S", add = "Q" }
 
-local function interpolate(curve, value)
-    local lowerBound, upperBound = -math.huge, math.huge
-    for level, itemLevel in pairs(curve) do
-        if level == value then
-            return floor(itemLevel + 0.5)
-        elseif level < value then
-            lowerBound = max(lowerBound, level)
-        else
-            upperBound = min(upperBound, level)
-        end
-    end
-    if lowerBound == -math.huge then
-        return floor(curve[upperBound] + 0.5)
-    elseif upperBound == math.huge then
-        return floor(curve[lowerBound] + 0.5)
-    end
-    return floor(curve[lowerBound] + (value - lowerBound) / (upperBound - lowerBound)
-        * (curve[upperBound] - curve[lowerBound]) + 0.5)
+
+-- ============================================================================
+-- Module Functions
+-- ============================================================================
+
+function BonusIdAlgorithm.Initialize(data)
+	BonusId = data
+	for k in pairs(BonusId.squishCurve) do
+		private.squishMax = max(private.squishMax, k)
+	end
 end
 
-local function parseLink(link)
-    -- Split on ':'
-    local allParts = {}
-    for part in (link .. ":"):gmatch("([^:]*):") do
-        allParts[#allParts + 1] = part
-    end
+function BonusIdAlgorithm.ProcessItem(link, itemLevel, hasMidnightScaling)
+	assert(not next(private.collectedTemp) and not next(private.bonusIdsTemp))
+	local linkDropLevel, linkContentTuningId = private.ParseLink(link, private.bonusIdsTemp)
+	private.ResolveBonusIds(private.bonusIdsTemp)
 
-    -- Variable-length section starts at index 15 (1-indexed)
-    -- Filter out parts starting with "|h"
-    local parts = {}
-    for i = 15, #allParts do
-        local p = allParts[i]
-        if p:sub(1, 2) ~= "|h" then
-            parts[#parts + 1] = p
-        end
-    end
+	-- Collect indirect first, then direct (direct overrides via dedup)
+	for _, bonusId in ipairs(private.bonusIdsTemp) do
+		local bonus = BonusId.bonuses[bonusId]
+		if bonus and not bonus.redirect then
+			if bonus.indirect then
+				private.CollectBonus(bonus)
+			end
+			hasMidnightScaling = hasMidnightScaling or bonus.midnight == "set"
+		end
+	end
+	for _, bonusId in ipairs(private.bonusIdsTemp) do
+		local bonus = BonusId.bonuses[bonusId]
+		if bonus and not bonus.redirect and not bonus.indirect then
+			private.CollectBonus(bonus)
+		end
+	end
+	wipe(private.bonusIdsTemp)
 
-    local idx = 1
+	if #private.collectedTemp == 0 then
+		if not hasMidnightScaling then
+			itemLevel = private.GetSquishValue(itemLevel)
+		end
+		return itemLevel
+	end
 
-    local numBonusIds = 0
-    if parts[idx] and parts[idx] ~= "" then
-        numBonusIds = tonumber(parts[idx])
-    end
-    idx = idx + 1
+	for _, bonus in ipairs(private.collectedTemp) do
+		local midnightOp = bonus.midnight
+		local op = bonus.op
+		if op == "legacyAdd" then
+			itemLevel = itemLevel + bonus.amount
+		elseif op == "add" then
+			if midnightOp == "force" and not hasMidnightScaling then
+				hasMidnightScaling = true
+				itemLevel = private.GetSquishValue(itemLevel)
+			end
+			itemLevel = itemLevel + bonus.amount
+		elseif op == "set" then
+			itemLevel = bonus.itemLevel
+		elseif op == "scale" then
+			local dropLevel = bonus.defaultLevel or linkDropLevel or DEFAULT_DROP_LEVEL
+			if bonus.contentTuningKey then
+				local contentTuningId = linkContentTuningId or bonus.contentTuningId
+				if not bonus.contentTuningDefaultOnly or not linkDropLevel then
+					dropLevel = private.ApplyContentTuning(dropLevel, contentTuningId, bonus.contentTuningKey)
+				end
+			end
+			itemLevel = private.GetCurveValue(bonus.curveId, dropLevel) + (bonus.offset or 0)
+		else
+			error("Unknown bonus op: "..tostring(op))
+		end
 
-    local bonusIds = {}
-    for _ = 1, numBonusIds do
-        bonusIds[#bonusIds + 1] = tonumber(parts[idx])
-        idx = idx + 1
-    end
+		if bonus.extraAmount then
+			itemLevel = itemLevel + bonus.extraAmount
+		end
 
-    local numModifiers = 0
-    if parts[idx] and parts[idx] ~= "" then
-        numModifiers = tonumber(parts[idx])
-    end
-    idx = idx + 1
+		-- Post-op midnight handling
+		if midnightOp == "set" then
+			hasMidnightScaling = true
+		elseif midnightOp == "squish" and hasMidnightScaling then
+			itemLevel = private.GetSquishValue(itemLevel)
+		end
+	end
+	wipe(private.collectedTemp)
 
-    local playerLevel = 0
-    local contentTuningId = 0
-    for _ = 1, numModifiers do
-        local modType = tonumber(parts[idx])
-        local modValue = tonumber(parts[idx + 1])
-        idx = idx + 2
-        if modType == 9 then
-            playerLevel = modValue
-        elseif modType == 28 then
-            contentTuningId = modValue
-        end
-    end
-
-    return bonusIds, playerLevel, contentTuningId
+	itemLevel = max(itemLevel, 1)
+	if not hasMidnightScaling then
+		itemLevel = private.GetSquishValue(itemLevel)
+	end
+	return itemLevel
 end
 
-local M = {}
 
-function M.new(data)
-    local bonuses = data.bonuses
-    local curves = data.curves
-    local squishCurveIndex = data.squishCurve
-    local squishCurve = curves[squishCurveIndex + 1]
-    local contentTuning = data.contentTuning
 
-    -- Pre-compute max squish key
-    local squishMax = -math.huge
-    for k in pairs(squishCurve) do
-        if k > squishMax then squishMax = k end
-    end
+-- ============================================================================
+-- Private Helper Functions
+-- ============================================================================
 
-    -- Expand CT remap
-    if data.contentTuningRemap then
-        for src, dst in pairs(data.contentTuningRemap) do
-            if contentTuning[dst] then
-                contentTuning[src] = contentTuning[dst]
-            end
-        end
-    end
+function private.CollectBonus(bonus)
+	local group = OP_GROUP[bonus.op]
+	if not group then
+		tinsert(private.collectedTemp, bonus)
+		return
+	end
 
-    local algo = {}
+	local prevIndex = private.collectedTemp[group]
+	if not prevIndex then
+		tinsert(private.collectedTemp, bonus)
+		private.collectedTemp[group] = #private.collectedTemp
+		return
+	end
 
-    local function getSquishValue(value)
-        if value > squishMax then
-            return 1
-        end
-        return interpolate(squishCurve, value)
-    end
-
-    local function getCurveValue(curveId, value)
-        return interpolate(curves[curveId + 1], value)
-    end
-
-    local function applyContentTuning(dropLevel, ctId, ctKey)
-        local ct = contentTuning[ctId]
-        if not ct then return dropLevel end
-        local op = ct[ctKey] or ct.op
-        if not op then return dropLevel end
-        local name = op[1]
-        if name == "cap" then
-            return min(dropLevel, op[2])
-        elseif name == "clamp" then
-            return min(max(dropLevel, op[2]), op[3])
-        elseif name == "const" then
-            return op[2]
-        elseif name == "capAdd" then
-            return min(dropLevel, op[2]) + op[3]
-        elseif name == "capAddFloor" then
-            return max(min(dropLevel, op[2]) + op[3], op[4])
-        end
-        return dropLevel
-    end
-
-    local function getBonusIds(rawBonusIds)
-        local result = {}
-        for _, id in ipairs(rawBonusIds) do
-            local d = bonuses[id]
-            if d and d.redirect then
-                result[#result + 1] = d.redirect
-            else
-                result[#result + 1] = id
-            end
-        end
-        sort(result, function(a, b)
-            local spA = (bonuses[a] or {}).sortPriority or 0
-            local spB = (bonuses[b] or {}).sortPriority or 0
-            if spA ~= spB then return spA < spB end
-            return a < b
-        end)
-        return result
-    end
-
-    function algo.processItem(link, baseItemLevel, hasMidnightScaling)
-        local rawBonusIds, playerLevel, contentTuningId = parseLink(link)
-
-        local itemLevel = baseItemLevel
-        local midnightScaling = hasMidnightScaling
-
-        local collected = {}
-        local bonusIdList = getBonusIds(rawBonusIds)
-
-        local function collectBonus(bonus)
-            if bonus.midnight == "set" then
-                midnightScaling = true
-            end
-
-            local group = OP_GROUP[bonus.op]
-            if not group then
-                collected[#collected + 1] = bonus
-                return
-            end
-
-            local prevIndex
-            for i, b in ipairs(collected) do
-                if OP_GROUP[b.op] == group then
-                    prevIndex = i
-                    break
-                end
-            end
-
-            if not prevIndex then
-                collected[#collected + 1] = bonus
-            else
-                local prevPrio = collected[prevIndex].priority
-                local newPrio = bonus.priority
-                if prevPrio ~= nil and newPrio ~= nil then
-                    if newPrio <= prevPrio then
-                        collected[prevIndex] = bonus
-                    end
-                else
-                    collected[prevIndex] = bonus
-                end
-            end
-        end
-
-        local function collectAll(bonusId)
-            local d = bonuses[bonusId]
-            if not d or d.redirect then return end
-            collectBonus(d)
-            if d.other then
-                collectBonus(d.other)
-            end
-        end
-
-        -- Collect indirect first, then direct (direct overrides via dedup)
-        for _, bonusId in ipairs(bonusIdList) do
-            local d = bonuses[bonusId]
-            if d and d.indirect then
-                collectAll(bonusId)
-            end
-        end
-        for _, bonusId in ipairs(bonusIdList) do
-            local d = bonuses[bonusId]
-            if d and not d.indirect then
-                collectAll(bonusId)
-            end
-        end
-
-        if #collected == 0 then
-            if not midnightScaling then
-                itemLevel = getSquishValue(itemLevel)
-            end
-            return itemLevel
-        end
-
-        for _, bonus in ipairs(collected) do
-            local op = bonus.op
-            if op == "legacyAdd" then
-                itemLevel = itemLevel + bonus.amount
-            elseif op == "add" then
-                if bonus.midnight == "force" and not midnightScaling then
-                    midnightScaling = true
-                    itemLevel = getSquishValue(itemLevel)
-                end
-                itemLevel = itemLevel + bonus.amount
-            elseif op == "set" then
-                itemLevel = bonus.itemLevel
-            elseif op == "scale" then
-                local dropLevel
-                if bonus.defaultLevel and bonus.defaultLevel ~= 0 then
-                    dropLevel = bonus.defaultLevel
-                elseif playerLevel ~= 0 then
-                    dropLevel = playerLevel
-                else
-                    dropLevel = 80
-                end
-
-                if bonus.contentTuningKey then
-                    local ct = contentTuningId
-                    if ct == 0 then ct = bonus.contentTuningId end
-                    if ct and ct ~= 0
-                        and (not bonus.contentTuningDefaultOnly or playerLevel == 0)
-                    then
-                        dropLevel = applyContentTuning(dropLevel, ct, bonus.contentTuningKey)
-                    end
-                end
-                itemLevel = getCurveValue(bonus.curveId, dropLevel) + (bonus.offset or 0)
-            end
-
-            -- Post-op midnight handling
-            local midnight = bonus.midnight
-            if midnight == "set" then
-                midnightScaling = true
-            elseif midnight == "squish" and midnightScaling then
-                itemLevel = getSquishValue(itemLevel)
-            end
-        end
-
-        itemLevel = max(itemLevel, 1)
-        if not midnightScaling then
-            itemLevel = getSquishValue(itemLevel)
-        end
-        return itemLevel
-    end
-
-    return algo
+	-- This new bonus overrides the previous one if it's higher priority (lower value)
+	-- or just if it comes afterwards and there's no priority set
+	local prevPriority = private.collectedTemp[prevIndex].priority
+	local newPriority = bonus.priority
+	if not prevPriority or not newPriority or newPriority <= prevPriority then
+		private.collectedTemp[prevIndex] = bonus
+	end
 end
 
-return M
+function private.GetSquishValue(value)
+	if value > private.squishMax then
+		return 1
+	end
+	return private.Interpolate(BonusId.squishCurve, value)
+end
+
+function private.GetCurveValue(curveId, value)
+	return private.Interpolate(BonusId.curves[curveId + 1], value)
+end
+
+function private.ApplyContentTuning(dropLevel, ctId, ctKey)
+	local contentTuning = BonusId.contentTuning[ctId]
+	if not contentTuning then
+		return dropLevel
+	end
+	local op = contentTuning[ctKey] or contentTuning.op
+	if not op then
+		return dropLevel
+	end
+	local name, value1, value2, value3 = unpack(op)
+	if name == "cap" then
+		return min(dropLevel, value1)
+	elseif name == "clamp" then
+		return min(max(dropLevel, value1), value2)
+	elseif name == "const" then
+		return value1
+	elseif name == "capAdd" then
+		return min(dropLevel, value1) + value2
+	elseif name == "capAddFloor" then
+		return max(min(dropLevel, value1) + value2, value3)
+	end
+	return dropLevel
+end
+
+function private.SortBonusIds(a, b)
+	local bonusA = BonusId.bonuses[a]
+	local bonusB = BonusId.bonuses[b]
+	local priorityA = bonusA and bonusA.sortPriority or 0
+	local priorityB = bonusB and bonusB.sortPriority or 0
+	if priorityA ~= priorityB then
+		return priorityA < priorityB
+	end
+	return a < b
+end
+
+function private.ResolveBonusIds(ids)
+	for i, id in ipairs(ids) do
+		local bonus = BonusId.bonuses[id]
+		if bonus and bonus.redirect then
+			ids[i] = bonus.redirect
+		end
+	end
+	sort(ids, private.SortBonusIds)
+	return ids
+end
+
+function private.ParseLink(link, bonusIdsTbl)
+	-- Split on ':'
+	wipe(private.allPartsTemp)
+	for part in gmatch(link, "([^:]*):") do
+		tinsert(private.allPartsTemp, part)
+	end
+
+	-- Variable-length section starts at index 15 (1-indexed)
+	-- Filter out parts starting with "|h"
+	wipe(private.partsTemp)
+	for i = 15, #private.allPartsTemp do
+		local p = private.allPartsTemp[i]
+		if strsub(p, 1, 2) ~= "|h" then
+			tinsert(private.partsTemp, p)
+		end
+	end
+
+	local idx = 1
+
+	local numBonusIds = 0
+	if private.partsTemp[idx] and private.partsTemp[idx] ~= "" then
+		numBonusIds = tonumber(private.partsTemp[idx])
+	end
+	idx = idx + 1
+
+	for _ = 1, numBonusIds do
+		tinsert(bonusIdsTbl, tonumber(private.partsTemp[idx]))
+		idx = idx + 1
+	end
+
+	local numModifiers = 0
+	if private.partsTemp[idx] and private.partsTemp[idx] ~= "" then
+		numModifiers = tonumber(private.partsTemp[idx])
+	end
+	idx = idx + 1
+
+	local dropLevel = nil
+	local contentTuningId = nil
+	for _ = 1, numModifiers do
+		local modType = tonumber(private.partsTemp[idx])
+		local modValue = tonumber(private.partsTemp[idx + 1])
+		idx = idx + 2
+		if modType == 9 and modValue ~= 0 then
+			dropLevel = modValue
+		elseif modType == 28 and modValue ~= 0 then
+			contentTuningId = modValue
+		end
+	end
+
+	return dropLevel, contentTuningId
+end
+
+function private.Interpolate(curve, value)
+	local lowerBound, upperBound = -math.huge, math.huge
+	for level, itemLevel in pairs(curve) do
+		if level == value then
+			return floor(itemLevel + 0.5)
+		elseif level < value then
+			lowerBound = max(lowerBound, level)
+		else
+			upperBound = min(upperBound, level)
+		end
+	end
+	if lowerBound == -math.huge then
+		return floor(curve[upperBound] + 0.5)
+	elseif upperBound == math.huge then
+		return floor(curve[lowerBound] + 0.5)
+	end
+	return floor(curve[lowerBound] + (value - lowerBound) / (upperBound - lowerBound) * (curve[upperBound] - curve[lowerBound]) + 0.5)
+end
