@@ -21,8 +21,7 @@ def _sort_priority(bonus_type):
     return 0
 
 
-_GROUP_SCALE = 49   # SCALING_CONFIG group value
-_GROUP_CQ = 52      # CRAFTING_QUALITY / MIDNIGHT_ITEM_LEVEL group value
+_OP_GROUP = {'scale': 'S', 'set': 'S', 'add': 'Q'}
 
 
 def _get_curve_point_value(dbc, curve_id, value):
@@ -46,7 +45,7 @@ def _export_bonus(entry, dbc):
     if bt == ItemBonusType.INCREASE_ITEM_LEVEL:
         if not entry.Value_0:
             return None
-        return {'op': 'add', 'amount': entry.Value_0}
+        return {'op': 'legacy_add', 'amount': entry.Value_0}
 
     elif bt in (ItemBonusType.SCALING_CONFIG, ItemBonusType.SCALING_CONFIG_2):
         if not dbc.item_scaling_config.has(entry.Value_0):
@@ -64,12 +63,12 @@ def _export_bonus(entry, dbc):
 
         result = {
             'op': 'scale',
-            'group': _GROUP_SCALE,
-            'priority': entry.Value_1,
             'curve_id': oc.CurveID,
             'offset': oc.Offset,
             'midnight': 'set' if sets_midnight else 'squish',
         }
+        if entry.Value_1:
+            result['priority'] = entry.Value_1
         if bt == ItemBonusType.SCALING_CONFIG:
             if sc.ItemLevel:
                 result['default_level'] = sc.ItemLevel
@@ -90,20 +89,19 @@ def _export_bonus(entry, dbc):
         sets_midnight = entry.Value_2 != 1
         return {
             'op': 'set',
-            'group': _GROUP_SCALE,
             'item_level': item_level,
             'midnight': 'set' if sets_midnight else 'squish',
         }
 
     elif bt == ItemBonusType.MIDNIGHT_ITEM_LEVEL:
-        return {'op': 'add', 'group': _GROUP_CQ, 'amount': entry.Value_0}
+        return {'op': 'add', 'amount': entry.Value_0}
 
     elif bt == ItemBonusType.BASE_ITEM_LEVEL:
-        return {'op': 'set', 'group': _GROUP_SCALE, 'item_level': entry.Value_0}
+        return {'op': 'set', 'item_level': entry.Value_0}
 
     elif bt == ItemBonusType.CRAFTING_QUALITY:
         amount = entry.Value_2 if entry.Value_1 == 1 else entry.Value_0
-        return {'op': 'add', 'group': _GROUP_CQ, 'amount': amount, 'midnight': 'force'}
+        return {'op': 'add', 'amount': amount, 'midnight': 'force'}
 
     elif bt in (ItemBonusType.STAT_SCALING, ItemBonusType.STAT_FIXED):
         curve_id = entry.Value_3
@@ -111,11 +109,10 @@ def _export_bonus(entry, dbc):
             return None
         elif not dbc.curve_point.get(curve_id):
             if bt == ItemBonusType.STAT_FIXED:
-                return {'op': 'set', 'group': _GROUP_SCALE, 'item_level': 1}
+                return {'op': 'set', 'item_level': 1}
             return None
         result = {
             'op': 'scale',
-            'group': _GROUP_SCALE,
             'curve_id': curve_id,
             'ct_key': 'stat',
         }
@@ -131,14 +128,14 @@ def _export_bonus(entry, dbc):
 
 
 def _dedup_entries(entries):
-    """Keep only the last entry per group. Entries without a group always kept."""
+    """Keep only the last entry per group. Ops without a group always kept."""
     seen = {}  # group -> index
     for i, entry in enumerate(entries):
-        group = entry.get('group')
+        group = _OP_GROUP.get(entry['op'])
         if group is not None:
             seen[group] = i
     return [e for i, e in enumerate(entries)
-            if 'group' not in e or seen.get(e['group']) == i]
+            if _OP_GROUP.get(e['op']) is None or seen[_OP_GROUP[e['op']]] == i]
 
 
 def _compact_number(v):
@@ -180,7 +177,10 @@ if __name__ == '__main__':
             target_id = entries[0].Value_0
             target_entries = dbc.item_bonus.get(target_id)
             if not any(e.bonus_type == ItemBonusType.APPLY_BONUS for e in target_entries):
-                bonuses[str(parent_id)] = {'sort_priority': sp, 'redirect': target_id}
+                redirect = {'redirect': target_id}
+                if sp:
+                    redirect['sp'] = sp
+                bonuses[str(parent_id)] = redirect
                 continue
 
         # Pre-resolve APPLY_BONUS entries into indirect list
@@ -201,11 +201,18 @@ if __name__ == '__main__':
 
         direct = _dedup_entries(direct)
         indirect = _dedup_entries(indirect)
-        if not direct and not indirect:
+
+        # Flatten to a single operation per bonus ID
+        ops = indirect or direct
+        if not ops:
             continue
-        data = {'sort_priority': sp, 'entries': direct}
+        data = dict(ops[0])
+        if sp:
+            data['sp'] = sp
         if indirect:
-            data['indirect'] = indirect
+            data['indirect'] = True
+        if len(ops) > 1:
+            data['then'] = ops[1]
         bonuses[str(parent_id)] = data
 
     # Collect all referenced curve IDs (for curves still needed at runtime)
@@ -247,6 +254,75 @@ if __name__ == '__main__':
 
     # Squish curve (separate, with special out-of-range handling)
     squish_curve = _export_curve_points(dbc, squish_curve_id)
+
+    # Simplify scale ops with constant curves into set ops
+    constant_curves = {cid: next(iter(pts.values()))
+                       for cid, pts in curves.items()
+                       if len(set(pts.values())) == 1}
+
+    def _simplify_scale(bonus):
+        if bonus.get('op') != 'scale':
+            return bonus
+        curve_key = str(bonus['curve_id'])
+        if curve_key not in constant_curves:
+            return bonus
+        result = {'op': 'set', 'item_level': constant_curves[curve_key] + bonus.get('offset', 0)}
+        for key in ('midnight', 'priority'):
+            if key in bonus:
+                result[key] = bonus[key]
+        return result
+
+    for bid, bonus in list(bonuses.items()):
+        if 'redirect' in bonus:
+            continue
+        simplified = _simplify_scale(bonus)
+        if simplified is not bonus:
+            for key in ('sp', 'indirect', 'then'):
+                if key in bonus:
+                    simplified[key] = bonus[key]
+            bonuses[bid] = simplified
+        if 'then' in bonuses[bid]:
+            bonuses[bid]['then'] = _simplify_scale(bonuses[bid]['then'])
+
+    # Remove curves no longer referenced by any bonus
+    still_referenced = set()
+    for bonus in bonuses.values():
+        if bonus.get('op') == 'scale':
+            still_referenced.add(str(bonus['curve_id']))
+        if isinstance(bonus.get('then'), dict) and bonus['then'].get('op') == 'scale':
+            still_referenced.add(str(bonus['then']['curve_id']))
+    curves = {k: v for k, v in curves.items() if k in still_referenced}
+
+    # Dedup curves and convert to array with index-based references
+    # 1. Find unique curves (dedup by value)
+    curve_index_map = {}  # old curve_id str -> array index
+    curves_by_value = {}  # json(points) -> array index
+    curves_list = []
+    for cid in sorted(curves.keys(), key=int):
+        key = json.dumps(curves[cid], sort_keys=True)
+        if key in curves_by_value:
+            curve_index_map[cid] = curves_by_value[key]
+        else:
+            idx = len(curves_list)
+            curves_list.append(curves[cid])
+            curves_by_value[key] = idx
+            curve_index_map[cid] = idx
+
+    # 2. Remap curve_id references in bonuses to array indices
+    def _remap_curve(bonus):
+        if bonus.get('op') == 'scale':
+            cid_str = str(bonus['curve_id'])
+            bonus['curve_id'] = curve_index_map[cid_str]
+    for bonus in bonuses.values():
+        if 'redirect' in bonus:
+            continue
+        _remap_curve(bonus)
+        if isinstance(bonus.get('then'), dict):
+            _remap_curve(bonus['then'])
+
+    curves = curves_list
+    logging.info("Curves: %d unique curves (%d total points)",
+                 len(curves), sum(len(v) for v in curves))
 
     # Pre-compute content tuning operations per bonus-type group.
     # Groups: 'sc' (SCALING_CONFIG), 'sc2' (SCALING_CONFIG_2), 'stat' (STAT_SCALING/STAT_FIXED)
@@ -309,6 +385,11 @@ if __name__ == '__main__':
                 sc2_op = ['clamp', min_with_offset, max_lvl]
             ops = {'sc': sc_op, 'sc2': sc2_op, 'stat': stat_op}
 
+        # Normalize clamp(x,x) → const(x)
+        for k, v in ops.items():
+            if v and v[0] == 'clamp' and v[1] == v[2]:
+                ops[k] = ['const', v[1]]
+
         # Only store entries with at least one non-passthrough operation
         ct_data = {k: v for k, v in ops.items() if v is not None}
         if ct_data:
@@ -337,6 +418,55 @@ if __name__ == '__main__':
             elif parent_key in content_tuning:
                 del content_tuning[parent_key]
 
+    # Compact content tuning: use 'op' as default when all three keys are present
+    for ct_id, ct_data in list(content_tuning.items()):
+        if set(ct_data.keys()) != {'sc', 'sc2', 'stat'}:
+            continue
+        values = list(ct_data.values())
+        # Find the most common value to use as default
+        from collections import Counter
+        value_counts = Counter(json.dumps(v) for v in values)
+        default_json, count = value_counts.most_common(1)[0]
+        if count >= 2:
+            default_val = json.loads(default_json)
+            compact = {'op': default_val}
+            for k, v in ct_data.items():
+                if v != default_val:
+                    compact[k] = v
+            content_tuning[ct_id] = compact
+
+    # Dedup content tuning: find entries with identical ops and build remap table
+    ct_remap = {}  # non-canonical ct_id -> canonical ct_id
+    ct_by_value = {}  # json(ops) -> canonical ct_id
+    for ct_id in sorted(content_tuning.keys(), key=int):
+        key = json.dumps(content_tuning[ct_id], sort_keys=True)
+        if key in ct_by_value:
+            ct_remap[ct_id] = ct_by_value[key]
+        else:
+            ct_by_value[key] = ct_id
+
+    if ct_remap:
+        # Remap ct_id references in bonuses
+        for bonus in bonuses.values():
+            if 'redirect' in bonus:
+                continue
+            for b in [bonus] + ([bonus['then']] if isinstance(bonus.get('then'), dict) else []):
+                if 'ct_id' in b:
+                    ct_str = str(b['ct_id'])
+                    if ct_str in ct_remap:
+                        b['ct_id'] = int(ct_remap[ct_str])
+
+        # Remove non-canonical entries
+        for ct_id in ct_remap:
+            del content_tuning[ct_id]
+
+        # Convert remap to int keys/values for compact storage
+        ct_remap_int = {int(k): int(v) for k, v in ct_remap.items()}
+        logging.info("CT dedup: removed %d duplicate entries (%d remaining), remap table: %d entries",
+                     len(ct_remap), len(content_tuning), len(ct_remap_int))
+    else:
+        ct_remap_int = {}
+
     # Assemble and write
     addon_data = {
         "build": build,
@@ -345,6 +475,8 @@ if __name__ == '__main__':
         "curves": curves,
         "content_tuning": content_tuning,
     }
+    if ct_remap_int:
+        addon_data["ct_remap"] = ct_remap_int
 
     output_path = os.path.join('.cache', build, 'addon_data.json')
     with open(output_path, 'w') as f:
@@ -353,6 +485,6 @@ if __name__ == '__main__':
     logging.info("Wrote addon data to %s", output_path)
     logging.info("Bonuses: %d bonus list IDs", len(bonuses))
     logging.info("Curves: %d curves (%d total points)",
-                 len(curves), sum(len(v) for v in curves.values()))
+                 len(curves), sum(len(v) for v in curves))
     logging.info("Squish curve: %d points", len(squish_curve))
     logging.info("Content tuning: %d entries", len(content_tuning))

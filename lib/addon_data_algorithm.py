@@ -8,6 +8,8 @@ from lib.dbc_file import DBC
 
 
 class AddonDataAlgorithm(Algorithm):
+    _OP_GROUP = {'scale': 'S', 'set': 'S', 'add': 'Q'}
+
     def __init__(self, dbc: DBC, build: str):
         self._dbc = dbc
 
@@ -20,6 +22,11 @@ class AddonDataAlgorithm(Algorithm):
         self._squish_curve = data['squish_curve']
         self._squish_keys = sorted(float(k) for k in self._squish_curve)
         self._content_tuning = data['content_tuning']
+        # Expand CT remap: add entries pointing non-canonical IDs to canonical data
+        for src, dst in data.get('ct_remap', {}).items():
+            dst_str = str(dst)
+            if dst_str in self._content_tuning:
+                self._content_tuning[str(src)] = self._content_tuning[dst_str]
 
     def process_item(self, link: str) -> int:
         base_item_level, has_midnight_scaling = self._dbc.item_sparse.get_info(self.get_item_id_from_link(link))
@@ -32,11 +39,11 @@ class AddonDataAlgorithm(Algorithm):
             if bonus.get('midnight') == 'set':
                 item.has_midnight_scaling = True
 
-            group = bonus.get('group')
+            group = self._OP_GROUP.get(bonus['op'])
             if group is None:
                 bonuses.append(bonus)
                 return
-            prev_index = next((i for i, b in enumerate(bonuses) if b.get('group') == group), None)
+            prev_index = next((i for i, b in enumerate(bonuses) if self._OP_GROUP.get(b['op']) == group), None)
             if prev_index is None:
                 bonuses.append(bonus)
             else:
@@ -48,14 +55,23 @@ class AddonDataAlgorithm(Algorithm):
                 else:
                     bonuses[prev_index] = bonus
 
-        # Collect indirect entries first (pre-resolved from APPLY_BONUS targets)
+        def collect_all(bonus_id):
+            data = self._bonuses.get(str(bonus_id))
+            if not data or 'redirect' in data:
+                return
+            collect_bonus(data)
+            if 'then' in data:
+                collect_bonus(data['then'])
+
+        # Collect indirect entries first, then direct (direct overrides via dedup)
         for bonus_id in bonus_ids:
-            for entry in self._get_indirect(bonus_id):
-                collect_bonus(entry)
-        # Then direct entries (override indirect via last-wins dedup)
+            data = self._bonuses.get(str(bonus_id))
+            if data and data.get('indirect'):
+                collect_all(bonus_id)
         for bonus_id in bonus_ids:
-            for entry in self._get_entries(bonus_id):
-                collect_bonus(entry)
+            data = self._bonuses.get(str(bonus_id))
+            if data and not data.get('indirect'):
+                collect_all(bonus_id)
 
         if not bonuses:
             if not item.has_midnight_scaling:
@@ -64,7 +80,9 @@ class AddonDataAlgorithm(Algorithm):
 
         for bonus in bonuses:
             op = bonus['op']
-            if op == 'add':
+            if op == 'legacy_add':
+                item.item_level += bonus['amount']
+            elif op == 'add':
                 if bonus.get('midnight') == 'force' and not item.has_midnight_scaling:
                     item.has_midnight_scaling = True
                     item.item_level = self._get_squish_value(item.item_level)
@@ -99,19 +117,11 @@ class AddonDataAlgorithm(Algorithm):
                 bonus_ids.append(data['redirect'])
             else:
                 bonus_ids.append(id)
-        bonus_ids.sort(key=lambda id: (self._bonuses.get(str(id), {}).get('sort_priority', 0), id))
+        bonus_ids.sort(key=lambda id: (self._bonuses.get(str(id), {}).get('sp', 0), id))
         return bonus_ids
 
-    def _get_entries(self, bonus_id: int) -> list:
-        data = self._bonuses.get(str(bonus_id))
-        return data.get('entries', []) if data else []
-
-    def _get_indirect(self, bonus_id: int) -> list:
-        data = self._bonuses.get(str(bonus_id))
-        return data.get('indirect', []) if data else []
-
     def _get_curve_value(self, curve_id: int, value: float) -> int:
-        points = self._curves[str(curve_id)]
+        points = self._curves[curve_id]
         return self._interpolate(points, value)
 
     def _get_squish_value(self, value: float) -> int:
@@ -154,7 +164,7 @@ class AddonDataAlgorithm(Algorithm):
         ct = self._content_tuning.get(str(content_tuning_id))
         if not ct:
             return drop_level
-        op = ct.get(ct_key)
+        op = ct.get(ct_key, ct.get('op'))
         if not op:
             return drop_level
         name = op[0]
