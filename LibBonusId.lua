@@ -81,13 +81,36 @@ function Lib.LoadData(data)
 	private.data = data
 end
 
----Parses an item link (returns nil for the itemId if and only if the link is invalid).
+---Calculates the item level for an item from its parsed link components.
+---@param itemId number The item ID
+---@param bonusIds number[] The bonus IDs applied to the item
+---@param modifierDropLevel number? The drop level for the item (modifier 9)
+---@param modifierContentTuningId numer? The content tuning ID for the item (modifier 28)
+---@return number
+function Lib.CalculateItemLevelFromItemInfo(itemId, bonusIds, modifierDropLevel, modifierContentTuningId)
+	assert(not next(private.bonusIdsTemp))
+	for _, bonusId in ipairs(bonusIds) do
+		tinsert(private.bonusIdsTemp, bonusId)
+	end
+	return private.Calculate(itemId, modifierDropLevel, modifierContentTuningId)
+end
+
+---Calculates the item level for an item from its link.
 ---@param link string The item link
----@param bonusIds number[] An empty table to store the parsed bonus IDs in
----@return number? itemId
----@return number? modifierDropLevel
----@return number? modifierContentTuningId
-function Lib.ParseLink(link, bonusIds)
+---@return number
+function Lib.CalculateItemLevelFromItemLink(link)
+	assert(not next(private.bonusIdsTemp))
+	local itemId, modifierDropLevel, modifierContentTuningId = private.ParseLink(link, private.bonusIdsTemp)
+	return private.Calculate(itemId, modifierDropLevel, modifierContentTuningId)
+end
+
+
+
+-- ============================================================================
+-- Private Helper Functions
+-- ============================================================================
+
+function private.ParseLink(link, bonusIds)
 	assert(#bonusIds == 0)
 	local itemIdStr, bonusModiferStr = strmatch(link, "^\124cnIQ[0-9]:\124Hitem:(%d+):%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:(.+)\124h%[.+%]\124h\124r$")
 	if not bonusModiferStr then
@@ -131,20 +154,9 @@ function Lib.ParseLink(link, bonusIds)
 	return itemId, dropLevel, contentTuningId
 end
 
----Calculates the item level for an item.
----@param itemId number The item ID
----@param bonusIds number[] The bonus IDs applied to the item
----@param modifierDropLevel number? The drop level for the item (modifier 9)
----@param modifierContentTuningId numer? The content tuning ID for the item (modifier 28)
----@return number
-function Lib.CalculateItemLevel(itemId, bonusIds, modifierDropLevel, modifierContentTuningId)
+function private.Calculate(itemId, modifierDropLevel, modifierContentTuningId)
 	local itemLevel = private.data.items[itemId] or 0
 	local hasMidnightScaling = private.data.midnightItems[itemId] or false
-
-	assert(not next(private.bonusIdsTemp))
-	for _, bonusId in ipairs(bonusIds) do
-		tinsert(private.bonusIdsTemp, bonusId)
-	end
 	private.ResolveBonusIds(private.bonusIdsTemp)
 
 	-- Collect indirect first, then direct (direct overrides via dedup)
@@ -216,12 +228,6 @@ function Lib.CalculateItemLevel(itemId, bonusIds, modifierDropLevel, modifierCon
 	end
 	return itemLevel
 end
-
-
-
--- ============================================================================
--- Private Helper Functions
--- ============================================================================
 
 function private.ResolveBonusIds(ids)
 	for i, id in ipairs(ids) do

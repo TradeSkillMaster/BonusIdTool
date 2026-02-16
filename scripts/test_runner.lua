@@ -24,9 +24,7 @@ end
 f()
 
 for line in io.lines() do
-    local bonusIds = {}
-    local itemId, dropLevel, contentTuningId = LibBonusId.ParseLink(line, bonusIds)
-    local result = LibBonusId.CalculateItemLevel(itemId, bonusIds, dropLevel, contentTuningId)
+    local result = LibBonusId.CalculateItemLevelFromItemLink(line)
     io.write(result .. "\n")
     io.flush()
 end
