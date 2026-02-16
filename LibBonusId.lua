@@ -9,6 +9,7 @@ local private = {
 	squishMax = nil,
 	bonusIdsTemp = {}, ---@type number[]
 	bonusesTemp = {}, ---@type BonusEntry[]
+	filterTemp = {}, ---@type number[]
 	bonusStringCache = {}, ---@type table<number, string|false>
 }
 local DATA_VERSION = 1
@@ -97,6 +98,16 @@ function Lib.GetBonusStringForLevel(itemLevel)
 		private.bonusStringCache[itemLevel] = result or false
 	end
 	return result
+end
+
+---Filters a list of bonus IDs to only those that impact the calculated item level.
+---@param bonusIds number[] The bonus IDs to filter
+function Lib.FilterItemLevelBonusIds(bonusIds)
+	for i = #bonusIds, 1, -1 do
+		if not private.data.bonuses[bonusIds[i]] then
+			tremove(bonusIds, i)
+		end
+	end
 end
 
 ---Calculates the item level for an item from its parsed link components.

@@ -21,6 +21,7 @@ opt.read_globals = {
 	-- Table Functions
 	"sort",
 	"tinsert",
+	"tremove",
 	"wipe",
 
 	-- Strictly Required WoW APIs
@@ -46,7 +47,8 @@ opt.quiet = 1
 opt.exclude_files = {
 	"LibStub/",
 	"scripts/",
-	".cache/"
+	".cache/",
+	"Data.lua",
 }
 
 return opt

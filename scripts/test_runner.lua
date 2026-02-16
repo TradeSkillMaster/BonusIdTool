@@ -6,6 +6,7 @@ _G.gmatch = string.gmatch
 _G.strmatch = string.match
 _G.sort = table.sort
 _G.tinsert = table.insert
+_G.tremove = table.remove
 _G.wipe = function(t) for i in pairs(t) do t[i] = nil end end
 function GetBuildInfo()
     return "12.0.1", "65893"
