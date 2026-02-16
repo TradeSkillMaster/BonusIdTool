@@ -410,7 +410,8 @@ def _write_lua_cbor(addon_data, path, crlf=False):
         f'local BUILD = "{build}"',
         'local Lib = LibStub("LibBonusId") ---@type LibBonusId',
         'if not Lib.ShouldLoadData(DATA_VERSION, BUILD) then return end',
-        f'Lib.LoadData(C_EncodingUtil.DeserializeCBOR(C_EncodingUtil.DecompressString(C_EncodingUtil.DecodeBase64("{b64}"))))',
+        f'local DATA = "{b64}"',
+        'Lib.LoadData(C_EncodingUtil.DeserializeCBOR(C_EncodingUtil.DecompressString(C_EncodingUtil.DecodeBase64(DATA))))',
     ]
 
     newline = '\r\n' if crlf else '\n'
