@@ -69,8 +69,7 @@ class GameTestLink:
 
 
 class LuaAlgorithm(Algorithm):
-    def __init__(self, dbc: DBC, build: str):
-        self._dbc = dbc
+    def __init__(self, build: str):
         lua_data_path = os.path.join('.cache', build, 'addon_data.lua')
         self._proc = subprocess.Popen(
             ['lua', os.path.join(SCRIPT_DIR, 'test_runner.lua'), lua_data_path],
@@ -79,9 +78,7 @@ class LuaAlgorithm(Algorithm):
         )
 
     def process_item(self, link: str) -> int:
-        base_item_level, has_midnight_scaling = self._dbc.item_sparse.get_info(self.get_item_id_from_link(link))
-        line = f"{link}\t{base_item_level}\t{1 if has_midnight_scaling else 0}\n"
-        self._proc.stdin.write(line)
+        self._proc.stdin.write(link + "\n")
         self._proc.stdin.flush()
         return int(self._proc.stdout.readline().strip())
 
@@ -103,12 +100,12 @@ class Test:
 
         if 'addon' in algorithms:
             logging.info("Testing addon data algorithm...")
-            addon_algorithm = AddonDataAlgorithm(self._dbc, self._build)
+            addon_algorithm = AddonDataAlgorithm(self._build)
             self._test_algorithm(addon_algorithm)
 
         if 'lua' in algorithms:
             logging.info("Testing Lua algorithm...")
-            lua_algorithm = LuaAlgorithm(self._dbc, self._build)
+            lua_algorithm = LuaAlgorithm(self._build)
             self._test_algorithm(lua_algorithm)
             lua_algorithm.close()
 

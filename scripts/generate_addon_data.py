@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 
+import base64
 import json
 import logging
 import os
 import sys
+import zlib
 from math import floor
+
+import cbor2
 
 from lib.dbc_file import CurveType, DBC, ItemBonusType
 
@@ -204,6 +208,25 @@ def _find_runs(entries, min_run=3):
     return segments
 
 
+def _build_item_data(dbc):
+    """Build per-item base level and midnight scaling data from ItemSparse.
+
+    Returns:
+        item_levels: dict {str(item_id): base_level} for all items
+        midnight_items: sorted list of item IDs with ItemSquishEraID == 2
+    """
+    item_levels = {}
+    midnight_items = []
+    for e in dbc.item_sparse._entries.values():
+        if e.Stackable > 1:
+            continue
+        item_levels[str(e.ID)] = e.ItemLevel
+        if e.ItemSquishEraID == 2:
+            midnight_items.append(e.ID)
+    midnight_items.sort()
+    return item_levels, midnight_items
+
+
 def _write_lua(addon_data, path, crlf=False):
     """Write addon data as a Lua file with loop compression."""
     lines = []
@@ -263,6 +286,46 @@ def _write_lua(addon_data, path, crlf=False):
     squish_max = max(float(k) for k in addon_data["curves"][squish_index])
     squish_max_lua = int(squish_max) if squish_max == int(squish_max) else squish_max
 
+    # Item levels (compressed with loops via helper function to avoid Lua 5.1's
+    # SHRT_MAX limit on local variable registrations per chunk)
+    item_levels = addon_data.get('item_levels', {})
+    sorted_item_ids = sorted(item_levels.keys(), key=int)
+    item_entries = [(int(k), item_levels[k]) for k in sorted_item_ids]
+    item_segments = _find_runs(item_entries)
+
+    lines.append('local items = {}')
+    lines.append('local function SetItemRange(lo, hi, level) for i = lo, hi do items[i] = level end end')
+    for seg in item_segments:
+        if seg[0] == 'single':
+            _, iid, val = seg
+            lines.append(f'items[{iid}] = {_lua_value(val)}')
+        else:
+            _, start, end, base_val, varying = seg
+            template = _lua_value_with_subs(base_val, varying)
+            if varying:
+                # Linear pattern — must use inline for loop (i is the loop variable)
+                lines.append(f'for i = {start}, {end} do items[i] = {template} end')
+            else:
+                # Constant value — use helper to avoid local variable limit
+                lines.append(f'SetItemRange({start}, {end}, {template})')
+
+    # Midnight items (hash set with loop compression for consecutive IDs)
+    midnight = addon_data.get('midnight_items', [])
+    lines.append('local midnightItems = {}')
+    if midnight:
+        lines.append('local function SetMidnightRange(lo, hi) for i = lo, hi do midnightItems[i] = true end end')
+        i = 0
+        while i < len(midnight):
+            j = i + 1
+            while j < len(midnight) and midnight[j] == midnight[j - 1] + 1:
+                j += 1
+            if j - i >= 3:
+                lines.append(f'SetMidnightRange({midnight[i]}, {midnight[j - 1]})')
+            else:
+                for k in range(i, j):
+                    lines.append(f'midnightItems[{midnight[k]}] = true')
+            i = j
+
     # Pass data to LibBonusId
     lines.append('Lib.LoadData({')
     lines.append('\tversion = DATA_VERSION,')
@@ -273,11 +336,89 @@ def _write_lua(addon_data, path, crlf=False):
     lines.append('\tbonuses = bonuses,')
     lines.append('\tcurves = curves,')
     lines.append('\tcontentTuning = contentTuning,')
+    lines.append('\titems = items,')
+    lines.append('\tmidnightItems = midnightItems,')
     lines.append('})')
 
     newline = '\r\n' if crlf else '\n'
     with open(path, 'w', newline='') as f:
         f.write(newline.join(lines) + newline)
+
+
+def _to_cbor_data(addon_data):
+    """Convert addon_data dict to the Lua-compatible structure for CBOR serialization.
+
+    Converts snake_case keys/values to camelCase, string keys to numeric where possible,
+    and expands the content tuning remap table inline.
+    """
+    def convert_key(k):
+        try:
+            return int(k)
+        except ValueError:
+            try:
+                return float(k)
+            except ValueError:
+                return _snake_to_camel(k)
+
+    def convert(v):
+        if isinstance(v, dict):
+            return {convert_key(k) if isinstance(k, str) else k: convert(val) for k, val in v.items()}
+        if isinstance(v, list):
+            return [convert(x) for x in v]
+        if isinstance(v, str):
+            return _snake_to_camel(v)
+        return v
+
+    bonuses = {int(k): convert(v) for k, v in addon_data['bonuses'].items()}
+    curves = [convert(curve) for curve in addon_data['curves']]
+
+    # Content tuning with remap expansion (so no post-load fixup needed in Lua)
+    content_tuning = {int(k): convert(v) for k, v in addon_data['content_tuning'].items()}
+    for src, dst in addon_data.get('content_tuning_remap', {}).items():
+        dst_int = int(dst)
+        if dst_int in content_tuning:
+            content_tuning[int(src)] = content_tuning[dst_int]
+
+    items = {int(k): v for k, v in addon_data.get('item_levels', {}).items()}
+    midnight = {mid: True for mid in addon_data.get('midnight_items', [])}
+    squish_idx = addon_data['squish_curve']
+
+    return {
+        'version': ADDON_DATA_VERSION,
+        'build': addon_data['build'],
+        'squishMax': addon_data['squish_max'],
+        'squishCurve': curves[squish_idx],
+        'bonuses': bonuses,
+        'curves': curves,
+        'contentTuning': content_tuning,
+        'items': items,
+        'midnightItems': midnight,
+    }
+
+
+def _write_lua_cbor(addon_data, path, crlf=False):
+    """Write addon data as a CBOR-compressed Lua file using C_EncodingUtil APIs."""
+    cbor_data = _to_cbor_data(addon_data)
+    cbor_bytes = cbor2.dumps(cbor_data)
+    co = zlib.compressobj(1, zlib.DEFLATED, -15)
+    compressed = co.compress(cbor_bytes) + co.flush()
+    b64 = base64.b64encode(compressed).decode('ascii')
+
+    build = addon_data["build"]
+    lines = [
+        f'local DATA_VERSION = {ADDON_DATA_VERSION}',
+        f'local BUILD = "{build}"',
+        'local Lib = LibStub("LibBonusId") ---@type LibBonusId',
+        'if not Lib.ShouldLoadData(DATA_VERSION, BUILD) then return end',
+        f'Lib.LoadData(C_EncodingUtil.DeserializeCBOR(C_EncodingUtil.DecompressString(C_EncodingUtil.DecodeBase64("{b64}"))))',
+    ]
+
+    newline = '\r\n' if crlf else '\n'
+    with open(path, 'w', newline='') as f:
+        f.write(newline.join(lines) + newline)
+
+    logging.info("CBOR %s: %d bytes (cbor=%d, zlib=%d, base64=%d)",
+                 path, os.path.getsize(path), len(cbor_bytes), len(compressed), len(b64))
 
 
 def _sort_priority(bonus_type):
@@ -732,6 +873,11 @@ if __name__ == '__main__':
     else:
         ct_remap_int = {}
 
+    # Build per-item data
+    item_levels, midnight_items = _build_item_data(dbc)
+    logging.info("Item data: %d items, %d midnight items",
+                 len(item_levels), len(midnight_items))
+
     # Assemble and write
     addon_data = {
         "build": build,
@@ -740,6 +886,8 @@ if __name__ == '__main__':
         "bonuses": bonuses,
         "curves": curves,
         "content_tuning": content_tuning,
+        "item_levels": item_levels,
+        "midnight_items": midnight_items,
     }
     if ct_remap_int:
         addon_data["content_tuning_remap"] = ct_remap_int
@@ -752,7 +900,7 @@ if __name__ == '__main__':
     _write_lua(addon_data, lua_cache_path)
 
     lua_root_path = 'Data.lua'
-    _write_lua(addon_data, lua_root_path, crlf=True)
+    _write_lua_cbor(addon_data, lua_root_path, crlf=True)
 
     logging.info("Wrote addon data to %s, %s, and %s", output_path, lua_cache_path, lua_root_path)
     logging.info("Bonuses: %d bonus list IDs", len(bonuses))
@@ -760,3 +908,4 @@ if __name__ == '__main__':
                  len(curves), sum(len(v) for v in curves))
     logging.info("Squish curve: index %d", squish_curve_index)
     logging.info("Content tuning: %d entries", len(content_tuning))
+    logging.info("Item data: %d items, %d midnight items", len(item_levels), len(midnight_items))

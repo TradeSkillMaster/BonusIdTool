@@ -49,6 +49,8 @@ local DEFAULT_DROP_LEVEL = 80
 ---@field bonuses table<number, BonusEntry>
 ---@field curves BonusIdCurve[]
 ---@field contentTuning table<number, BonusContentTuning>
+---@field items table<number, number>
+---@field midnightItems table<number, boolean>
 
 
 
@@ -79,17 +81,19 @@ function Lib.LoadData(data)
 	private.data = data
 end
 
----Parses an item link.
+---Parses an item link (returns nil for the itemId if and only if the link is invalid).
 ---@param link string The item link
 ---@param bonusIds number[] An empty table to store the parsed bonus IDs in
+---@return number? itemId
 ---@return number? modifierDropLevel
 ---@return number? modifierContentTuningId
 function Lib.ParseLink(link, bonusIds)
 	assert(#bonusIds == 0)
-	local bonusModiferStr = strmatch(link, "^\124cnIQ[0-9]:\124Hitem:%d+:%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:(.+)\124h%[.+%]\124h\124r$")
+	local itemIdStr, bonusModiferStr = strmatch(link, "^\124cnIQ[0-9]:\124Hitem:(%d+):%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:%d*:(.+)\124h%[.+%]\124h\124r$")
 	if not bonusModiferStr then
-		return nil, nil
+		return nil, nil, nil
 	end
+	local itemId = tonumber(itemIdStr)
 	local dropLevel, contentTuningId = nil, nil
 	local numBonusIds, numModifiers, modifierOffset, currentModifierType = nil, nil, nil, nil
 	for part in gmatch(bonusModiferStr, "(%d*):") do
@@ -98,7 +102,7 @@ function Lib.ParseLink(link, bonusIds)
 			numBonusIds = part or 0
 		elseif #bonusIds < numBonusIds then
 			if not part then
-				return nil, nil
+				return nil, nil, nil
 			end
 			tinsert(bonusIds, part)
 		elseif not numModifiers then
@@ -106,7 +110,7 @@ function Lib.ParseLink(link, bonusIds)
 			modifierOffset = 0
 		elseif modifierOffset < numModifiers * 2 then
 			if not part then
-				return nil, nil
+				return nil, nil, nil
 			end
 			if modifierOffset % 2 == 0 then
 				currentModifierType = part
@@ -124,18 +128,18 @@ function Lib.ParseLink(link, bonusIds)
 			break
 		end
 	end
-	return dropLevel, contentTuningId
+	return itemId, dropLevel, contentTuningId
 end
 
 ---Calculates the item level for an item.
----@param baseItemLevel number The base item level for the item
----@param hasMidnightScaling boolean Whether or not the base item has midnight scaling pre-applied
+---@param itemId number The item ID
 ---@param bonusIds number[] The bonus IDs applied to the item
 ---@param modifierDropLevel number? The drop level for the item (modifier 9)
 ---@param modifierContentTuningId numer? The content tuning ID for the item (modifier 28)
 ---@return number
-function Lib.CalculateItemLevel(baseItemLevel, hasMidnightScaling, bonusIds, modifierDropLevel, modifierContentTuningId)
-	local itemLevel = baseItemLevel
+function Lib.CalculateItemLevel(itemId, bonusIds, modifierDropLevel, modifierContentTuningId)
+	local itemLevel = private.data.items[itemId] or 0
+	local hasMidnightScaling = private.data.midnightItems[itemId] or false
 
 	assert(not next(private.bonusIdsTemp))
 	for _, bonusId in ipairs(bonusIds) do

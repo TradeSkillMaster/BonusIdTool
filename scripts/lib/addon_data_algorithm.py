@@ -4,15 +4,12 @@ from math import floor, inf
 
 from lib.algorithm import Algorithm
 from lib.item import Item
-from lib.dbc_file import DBC
 
 
 class AddonDataAlgorithm(Algorithm):
     _OP_GROUP = {'scale': 'S', 'set': 'S', 'add': 'Q'}
 
-    def __init__(self, dbc: DBC, build: str):
-        self._dbc = dbc
-
+    def __init__(self, build: str):
         addon_data_path = os.path.join('.cache', build, 'addon_data.json')
         with open(addon_data_path, 'r') as f:
             data = json.load(f)
@@ -22,14 +19,21 @@ class AddonDataAlgorithm(Algorithm):
         self._squish_curve_index = data['squish_curve']
         self._squish_max = data['squish_max']
         self._content_tuning = data['content_tuning']
+        self._item_levels = data.get('item_levels', {})
+        self._midnight_items = set(data.get('midnight_items', []))
         # Expand CT remap: add entries pointing non-canonical IDs to canonical data
         for src, dst in data.get('content_tuning_remap', {}).items():
             dst_str = str(dst)
             if dst_str in self._content_tuning:
                 self._content_tuning[str(src)] = self._content_tuning[dst_str]
 
+    def _get_item_info(self, item_id: int) -> tuple[int, bool]:
+        base_level = self._item_levels.get(str(item_id), 0)
+        has_midnight = item_id in self._midnight_items
+        return base_level, has_midnight
+
     def process_item(self, link: str) -> int:
-        base_item_level, has_midnight_scaling = self._dbc.item_sparse.get_info(self.get_item_id_from_link(link))
+        base_item_level, has_midnight_scaling = self._get_item_info(self.get_item_id_from_link(link))
         item = Item(link, base_item_level, has_midnight_scaling)
 
         bonuses: list[dict] = []

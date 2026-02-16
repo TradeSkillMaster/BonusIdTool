@@ -249,6 +249,7 @@ class ItemScalingConfig(DBCTypeOneToOne):
     Flags: int
 
 class ItemSparse(DBCTypeOneToOne):
+    Stackable: int
     ItemSquishEraID: int
     ItemLevel: int
 
