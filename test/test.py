@@ -85,6 +85,12 @@ class LuaAlgorithm(Algorithm):
         self._stdin = self._proc.stdin
         self._stdout = self._proc.stdout
 
+    def _get_item_info(self, item_id):
+        raise NotImplementedError
+
+    def _process(self, item):
+        raise NotImplementedError
+
     def process_item(self, link: str) -> int:
         self._stdin.write(link + "\n")
         self._stdin.flush()
