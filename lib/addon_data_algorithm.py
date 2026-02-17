@@ -32,10 +32,7 @@ class AddonDataAlgorithm(Algorithm):
         has_midnight = item_id in self._midnight_items
         return base_level, has_midnight
 
-    def process_item(self, link: str) -> int:
-        base_item_level, has_midnight_scaling = self._get_item_info(self.get_item_id_from_link(link))
-        item = Item(link, base_item_level, has_midnight_scaling)
-
+    def _process(self, item: Item) -> int:
         bonuses: list[dict] = []
         bonus_ids = self._get_bonus_ids(item)
 

@@ -6,18 +6,21 @@ import logging
 import os
 import re
 import subprocess
+import sys
 from typing import Self
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, ROOT_DIR)
 
 from lib.algorithm import Algorithm
 from lib.addon_data_algorithm import AddonDataAlgorithm
 from lib.direct_dbc_algorithm import DirectDBCAlgorithm
 from lib.dbc_file import DBC
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 def _read_test_data_lines(file_name: str):
-    with open(os.path.join(SCRIPT_DIR, 'test_data', file_name)) as f:
+    with open(os.path.join(SCRIPT_DIR, 'data', file_name)) as f:
         for line in f:
             line = line.strip()
             if line:

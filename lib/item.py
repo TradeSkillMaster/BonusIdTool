@@ -20,3 +20,13 @@ class Item:
                 self.modifier_player_level = modifier_value
             elif modifier_type == self._CONTENT_TUNING_ID_MODIFIER_TYPE:
                 self.modifier_content_tuning_id = modifier_value
+
+    @classmethod
+    def from_info(cls, bonus_ids: list[int], base_item_level: int, has_midnight_scaling: bool = False, player_level: int = 0, content_tuning_id: int = 0) -> 'Item':
+        item = object.__new__(cls)
+        item.item_level = base_item_level
+        item.has_midnight_scaling = has_midnight_scaling
+        item.bonus_ids = bonus_ids
+        item.modifier_player_level = player_level
+        item.modifier_content_tuning_id = content_tuning_id
+        return item

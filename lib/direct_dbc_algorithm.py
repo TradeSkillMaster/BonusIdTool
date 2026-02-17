@@ -10,10 +10,10 @@ class DirectDBCAlgorithm(Algorithm):
     def __init__(self, dbc: DBC):
         self._dbc = dbc
 
-    def process_item(self, link: str) -> int:
-        base_item_level, has_midnight_scaling = self._dbc.item_sparse.get_info(self.get_item_id_from_link(link))
-        item = Item(link, base_item_level, has_midnight_scaling)
+    def _get_item_info(self, item_id: int) -> tuple[int, bool]:
+        return self._dbc.item_sparse.get_info(item_id)
 
+    def _process(self, item: Item) -> int:
         bonuses: list[ItemBonus] = []
         bonus_ids = list(self._get_bonus_ids(item))
 
