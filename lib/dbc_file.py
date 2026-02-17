@@ -34,7 +34,7 @@ class DBCType(ABC):
         return f"{self.__class__.__name__}({fields_str})"
 
     @classmethod
-    def _get_annotations(cls) -> dict[str,Any] | None:
+    def _get_annotations(cls) -> dict[str,Any]:
         return cls.__annotations
 
 class DBCTypeOneToOne(DBCType, ABC):
@@ -48,7 +48,7 @@ class DBCTypeOneToMany(DBCType, ABC):
         super().__init_subclass__(**kwargs)
         index_fields = [k for k, v in cls._get_annotations().items() if v == DBCTypeOneToMany.Index]
         assert len(index_fields) == 1
-        cls.__index_field = index_fields[0] if index_fields else None
+        cls.__index_field = index_fields[0]
 
     def _get_index_value(self) -> Index:
         return getattr(self, self.__index_field)

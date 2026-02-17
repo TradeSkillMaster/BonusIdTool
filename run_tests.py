@@ -47,7 +47,7 @@ class GameTestData:
             result.append(cls(link_pattern, data))
         return result
 
-    def get_link(self, id: int) -> int:
+    def get_link(self, id: int) -> str:
         return self._link_pattern.format(id)
 
     def get_value(self, id: int, default: int) -> int:
@@ -63,7 +63,9 @@ class GameTestLink:
     def from_file(cls, file_name: str) -> list[Self]:
         result = []
         for line in _read_test_data_lines(file_name):
-            expected, link = re.search(r"^([0-9]+),(.+)$", line).groups()
+            match = re.search(r"^([0-9]+),(.+)$", line)
+            assert match
+            expected, link = match.groups()
             result.append(cls(link, int(expected)))
         return result
 
@@ -76,23 +78,26 @@ class LuaAlgorithm(Algorithm):
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             text=True, bufsize=1,
         )
+        assert self._proc.stdin and self._proc.stdout
+        self._stdin = self._proc.stdin
+        self._stdout = self._proc.stdout
 
     def process_item(self, link: str) -> int:
-        self._proc.stdin.write(link + "\n")
-        self._proc.stdin.flush()
-        return int(self._proc.stdout.readline().strip())
+        self._stdin.write(link + "\n")
+        self._stdin.flush()
+        return int(self._stdout.readline().strip())
 
     def bonus_string_round_trip(self, link: str) -> tuple[int, str | None, int | None]:
-        self._proc.stdin.write(f"BONUS_RT:{link}\n")
-        self._proc.stdin.flush()
-        parts = self._proc.stdout.readline().strip().split("\t")
+        self._stdin.write(f"BONUS_RT:{link}\n")
+        self._stdin.flush()
+        parts = self._stdout.readline().strip().split("\t")
         item_level = int(parts[0])
         if parts[1] == "NIL":
             return item_level, None, None
         return item_level, parts[1], int(parts[2])
 
     def close(self):
-        self._proc.stdin.close()
+        self._stdin.close()
         self._proc.wait()
 
 

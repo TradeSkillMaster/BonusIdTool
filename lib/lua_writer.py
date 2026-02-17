@@ -158,6 +158,7 @@ def _find_runs(entries: list[tuple[int, Any]], min_run: int = 3) -> list[tuple[A
                     break
             else:
                 # Verify pattern holds
+                assert varying is not None
                 if len(diffs) != len(varying):
                     break
                 ok = True
