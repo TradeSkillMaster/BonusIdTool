@@ -6,9 +6,33 @@ import logging
 import os
 import pickle
 import requests
-from typing import Any, Dict, Generic, Type, TypeVar
+from typing import Any, Generic, Type, TypeVar
 
 _DUMMY_CLASS_MEMBERS = dir(type('dummy', (ABC,), {}))
+
+def download_csv(table_name: str, build: str) -> list[dict[str,str]]:
+    cache_dir_path = os.path.join('.cache', build)
+    os.makedirs(cache_dir_path, exist_ok=True)
+    csv_path = os.path.join(cache_dir_path, f'{table_name}.csv')
+    if os.path.exists(csv_path):
+        logging.info("Building from cached CSV (table_name=%s, build=%s)", table_name, build)
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            data = f.read()
+    else:
+        logging.info("Downloading DBC data (table_name=%s, build=%s)", table_name, build)
+        res = requests.get(f"https://wago.tools/db2/{table_name}/csv?build={build}")
+        assert res.status_code == 200
+        data = res.content.decode('utf-8')
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write(data)
+    return list(DictReader(data.splitlines(), delimiter=','))
+
+
+def get_latest_build() -> str:
+    res = requests.get("https://wago.tools/api/builds/wow/latest")
+    res.raise_for_status()
+    return res.json()["version"]
+
 
 class DBCType(ABC):
     ID: int
@@ -20,7 +44,7 @@ class DBCType(ABC):
         assert 'ID' not in annotations
         cls.__annotations = annotations
 
-    def __init__(self, values: Dict[str,str]):
+    def __init__(self, values: dict[str,str]):
         self.ID = int(values['ID'])
         for field, field_type in self._get_annotations().items():
             value = values[field]
@@ -62,23 +86,11 @@ class DBCFile(Generic[_EntryType], ABC):
         cache_dir_path = os.path.join('.cache', build)
         os.makedirs(cache_dir_path, exist_ok=True)
         pickle_path = os.path.join(cache_dir_path, f'{table_name}.pkl')
-        csv_path = os.path.join(cache_dir_path, f'{table_name}.csv')
         if os.path.exists(pickle_path):
             with open(pickle_path, 'rb') as f:
                 self._entries = pickle.load(f)
         else:
-            if os.path.exists(csv_path):
-                logging.info("Building from cached CSV (table_name=%s, build=%s)", table_name, build)
-                with open(csv_path, 'r', encoding='utf-8') as f:
-                    data = f.read()
-            else:
-                logging.info("Downloading DBC data (table_name=%s, build=%s)", table_name, build)
-                res = requests.get(f"https://wago.tools/db2/{table_name}/csv?build={build}")
-                assert res.status_code == 200
-                data = res.content.decode('utf-8')
-                with open(csv_path, 'w', encoding='utf-8') as f:
-                    f.write(data)
-            entries = [self.EntryType(r) for r in DictReader(data.splitlines(), delimiter=',')]
+            entries = [self.EntryType(r) for r in download_csv(table_name, build)]
             self._entries = self._build_entries(entries)
             with open(pickle_path, 'wb') as f:
                 pickle.dump(self._entries, f)
@@ -113,7 +125,7 @@ class DBCFileOneToMany(DBCFile[_EntryTypeOneToMany], Generic[_EntryTypeOneToMany
         super().__init_subclass__(**kwargs)
 
     def _build_entries(self, entries):
-        result: Dict[int,list[_EntryTypeOneToMany]] = {}
+        result: dict[int,list[_EntryTypeOneToMany]] = {}
         for entry in entries:
             index_value = entry._get_index_value()
             if index_value not in result:

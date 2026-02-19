@@ -3,24 +3,10 @@
 import argparse
 import logging
 
-import requests
-
-
-def resolve_build(build: str) -> str:
-    """Resolve 'latest' to the actual build version from wago.tools."""
-    if build.lower() != 'latest':
-        return build
-    logging.info("Fetching latest build from wago.tools...")
-    res = requests.get("https://wago.tools/api/builds")
-    res.raise_for_status()
-    builds = res.json()["wow"]
-    latest = builds[0]["version"]
-    logging.info("Latest build: %s", latest)
-    return latest
+from lib.dbc_file import get_latest_build
 
 
 def cmd_generate(args):
-    """Generate addon data (JSON + Lua) from DBC files."""
     from lib.dbc_file import DBC
     from lib.generate_addon_data import AddonDataGenerator
     generator = AddonDataGenerator(DBC(args.build))
@@ -29,15 +15,29 @@ def cmd_generate(args):
 
 
 def cmd_test(args):
-    """Run tests comparing algorithm output against game-extracted data."""
     from test.test import Test
     algorithms = ['dbc', 'addon', 'lua'] if args.algorithm == 'all' else [args.algorithm]
     test = Test(args.build)
     test.main(algorithms)
 
 
+def cmd_dbc(args):
+    from lib.dbc_file import download_csv
+    rows = download_csv(args.table, args.build)
+    if not rows:
+        import sys
+        print(f"No data returned for table {args.table} build {args.build}", file=sys.stderr)
+        sys.exit(1)
+    if args.columns:
+        print(','.join(rows[0].keys()))
+        return
+    print(','.join(rows[0].keys()))
+    limit = args.head if args.head else len(rows)
+    for row in rows[:limit]:
+        print(','.join(row.values()))
+
+
 def cmd_calc(args):
-    """Calculate item level from a WoW item link or item info."""
     if args.algorithm == 'addon':
         from lib.addon_data_algorithm import AddonDataAlgorithm
         algorithm = AddonDataAlgorithm(args.build)
@@ -78,6 +78,13 @@ def main():
     p_test.add_argument('-a', '--algorithm', choices=['dbc', 'addon', 'lua', 'all'], default='all', help='Which algorithm to test (default: all)')
     p_test.set_defaults(func=cmd_test)
 
+    p_dbc = subparsers.add_parser('dbc', help='Download and print a DBC table CSV from wago.tools')
+    p_dbc.add_argument('table', help='DBC table name (e.g. ItemBonus, CurvePoint, ContentTuning)')
+    p_dbc.add_argument('build', nargs='?', default='latest', help='Game build version (default: latest)')
+    p_dbc.add_argument('--head', type=int, metavar='N', help='Only print the first N data rows')
+    p_dbc.add_argument('--columns', action='store_true', help='Only print column names')
+    p_dbc.set_defaults(func=cmd_dbc)
+
     p_calc = subparsers.add_parser('calc', help='Calculate item level from WoW item link(s) or item info')
     p_calc.add_argument('build', nargs='?', default='latest', help='Game build version (default: latest)')
     p_calc.add_argument('links', nargs='*', help='WoW item link(s)')
@@ -96,8 +103,8 @@ def main():
         datefmt='%H:%M:%S',
     )
 
-    if hasattr(args, 'build'):
-        args.build = resolve_build(args.build)
+    if args.build.lower() == 'latest':
+        args.build = get_latest_build()
 
     args.func(args)
 

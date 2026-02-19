@@ -170,21 +170,3 @@ class Test:
                 logging.error("GetBonusStringForLevel(%d) returned nil, link='%s'", item_level, data.link)
             elif rt_level != item_level:
                 logging.error("bonusString=%s, level=%d, got=%d, link='%s'", bonus_string, item_level, rt_level, data.link)
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Test item level algorithms against game data')
-    parser.add_argument('build', help='Game build version (e.g. 12.0.1.65893)')
-    parser.add_argument('-a', '--algorithm', choices=['dbc', 'addon', 'lua', 'all'], default='all',
-                        help='Which algorithm to test (default: all)')
-    args = parser.parse_args()
-
-    logging.basicConfig(
-        level = logging.INFO,
-        format = '%(asctime)s.%(msecs)03d %(levelname)s [%(module)s:%(lineno)d] %(message)s',
-        datefmt = '%H:%M:%S'
-    )
-
-    algorithms = ['dbc', 'addon', 'lua'] if args.algorithm == 'all' else [args.algorithm]
-    test = Test(args.build)
-    test.main(algorithms)

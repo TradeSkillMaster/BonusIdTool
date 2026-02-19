@@ -40,6 +40,20 @@ python bonus_id_tool.py test [build] -a addon  # Addon data algorithm only
 python bonus_id_tool.py test [build] -a lua    # Lua algorithm only
 ```
 
+### Download DBC data
+
+```bash
+python bonus_id_tool.py dbc <TableName> [build]
+```
+
+Downloads and prints a DBC table CSV from [wago.tools](https://wago.tools). Useful for inspecting raw DBC data.
+
+```bash
+python bonus_id_tool.py dbc ItemBonus                 # full table, latest build
+python bonus_id_tool.py dbc CurvePoint --head 20      # first 20 rows
+python bonus_id_tool.py dbc ContentTuning --columns   # column names only
+```
+
 ### Calculate item level
 
 From a WoW item link:
