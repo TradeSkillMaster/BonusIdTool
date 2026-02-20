@@ -19,7 +19,7 @@ class Algorithm(ABC):
 
     def process_item_info(self, item_id: int, bonus_ids: list[int], player_level: int = 0, content_tuning_id: int = 0) -> int:
         base_item_level, has_midnight_scaling = self._get_item_info(item_id)
-        item = Item.from_info(bonus_ids, base_item_level, has_midnight_scaling, player_level, content_tuning_id)
+        item = Item.from_info(item_id, bonus_ids, base_item_level, has_midnight_scaling, player_level, content_tuning_id)
         return self._process(item)
 
     @abstractmethod

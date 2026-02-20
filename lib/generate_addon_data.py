@@ -53,9 +53,11 @@ class AddonDataGenerator:
         content_tuning = self._build_content_tuning()
         ct_remap_int = self._dedup_content_tuning(bonuses, content_tuning)
 
-        item_levels, midnight_items = self._build_item_data()
-        logging.info("Item data: %d items, %d midnight items",
-                     len(item_levels), len(midnight_items))
+        item_range_starts, item_range_levels, midnight_items = self._build_item_data()
+        tree_bonus_lists, item_tree_bonus_map = self._build_item_tree_bonuses()
+        logging.info("Item data: %d ranges (%d items), %d midnight items, %d tree bonus items (%d unique lists)",
+                     len(item_range_starts), sum(1 for l in item_range_levels if l > 0),
+                     len(midnight_items), len(item_tree_bonus_map), len(tree_bonus_lists))
 
         squish_max = int(max(float(k) for k in curves_list[squish_curve_index]))
         level_to_bonus_string = self._build_bonus_string_table(
@@ -68,8 +70,11 @@ class AddonDataGenerator:
             "bonuses": bonuses,
             "curves": curves_list,
             "content_tuning": content_tuning,
-            "item_levels": item_levels,
+            "item_range_starts": item_range_starts,
+            "item_range_levels": item_range_levels,
             "midnight_items": midnight_items,
+            "tree_bonus_lists": tree_bonus_lists,
+            "item_tree_bonuses": item_tree_bonus_map,
             "level_to_bonus_string": level_to_bonus_string,
         }
         if ct_remap_int:
@@ -80,7 +85,7 @@ class AddonDataGenerator:
                      len(curves_list), sum(len(v) for v in curves_list))
         logging.info("Squish curve: index %d", squish_curve_index)
         logging.info("Content tuning: %d entries", len(content_tuning))
-        logging.info("Item data: %d items, %d midnight items", len(item_levels), len(midnight_items))
+        logging.info("Item data: %d ranges, %d midnight items", len(item_range_starts), len(midnight_items))
 
         return addon_data
 
@@ -484,18 +489,98 @@ class AddonDataGenerator:
 
     # -- Item data --
 
-    def _build_item_data(self) -> tuple[dict[str, int], list[int]]:
-        """Build per-item base level and midnight scaling data from ItemSparse."""
-        item_levels = {}
+    def _build_item_data(self) -> tuple[list[int], list[int], list[int]]:
+        """Build range-based item level data and midnight scaling list.
+
+        Returns (item_range_starts, item_range_levels, midnight_items) where
+        the range arrays encode consecutive same-level runs with gap entries
+        (level 0) for missing item IDs. Binary search on item_range_starts
+        finds the range containing a given item ID.
+        """
+        # Collect raw item data
+        raw_items = []
         midnight_items = []
         for e in self._dbc.item_sparse._entries.values():
             if e.Stackable > 1:
                 continue
-            item_levels[str(e.ID)] = e.ItemLevel
+            raw_items.append((e.ID, e.ItemLevel))
             if e.ItemSquishEraID == 2:
                 midnight_items.append(e.ID)
         midnight_items.sort()
-        return item_levels, midnight_items
+        raw_items.sort()
+
+        # Build ranges with gap entries
+        range_starts = []
+        range_levels = []
+        prev_end = None
+        i = 0
+        while i < len(raw_items):
+            start_id, level = raw_items[i]
+            j = i + 1
+            while j < len(raw_items) and raw_items[j][0] == raw_items[j - 1][0] + 1 and raw_items[j][1] == level:
+                j += 1
+            end_id = raw_items[j - 1][0]
+
+            if prev_end is not None and start_id > prev_end + 1:
+                range_starts.append(prev_end + 1)
+                range_levels.append(0)
+
+            range_starts.append(start_id)
+            range_levels.append(level)
+            prev_end = end_id
+            i = j
+
+        # Terminating gap so lookups past the last item return 0
+        if prev_end is not None:
+            range_starts.append(prev_end + 1)
+            range_levels.append(0)
+
+        return range_starts, range_levels, midnight_items
+
+    def _build_item_tree_bonuses(self) -> tuple[list[list[int]], dict[str, int]]:
+        """Build per-item bonus tree mapping for bonus 3524 resolution.
+
+        Returns (tree_bonus_lists, item_tree_bonus_map) where:
+        - tree_bonus_lists: deduplicated list of unique bonus ID lists
+        - item_tree_bonus_map: {item_id: 0-based index into tree_bonus_lists}
+        APPLY_BONUS redirects are pre-resolved so consumers don't need to.
+        """
+        # First pass: collect raw bonus ID lists per item
+        raw = {}
+        for item_id, entries in self._dbc.item_x_bonus_tree._entries.items():
+            bonus_ids = []
+            for entry in entries:
+                for node in self._dbc.item_bonus_tree_node.get(entry.ItemBonusTreeID):
+                    if node.ItemContext == 0 and node.ChildItemBonusListID:
+                        bid = node.ChildItemBonusListID
+                        # Follow simple APPLY_BONUS redirects
+                        bonus_entries = self._dbc.item_bonus.get(bid)
+                        if len(bonus_entries) == 1 and bonus_entries[0].bonus_type == ItemBonusType.APPLY_BONUS:
+                            target = bonus_entries[0].Value_0
+                            if not any(e.bonus_type == ItemBonusType.APPLY_BONUS for e in self._dbc.item_bonus.get(target)):
+                                bid = target
+                        bonus_ids.append(bid)
+            if not bonus_ids:
+                continue
+            has_ilevel = any(
+                e.bonus_type in self._ILEVEL_TYPES
+                for bid in bonus_ids
+                for e in self._dbc.item_bonus.get(bid)
+            )
+            if has_ilevel:
+                raw[item_id] = bonus_ids
+
+        # Second pass: deduplicate lists
+        unique_lists: dict[tuple[int, ...], int] = {}
+        tree_bonus_lists: list[list[int]] = []
+        item_tree_bonus_map: dict[str, int] = {}
+        for item_id in sorted(raw):
+            key = tuple(raw[item_id])
+            if key not in unique_lists:
+                unique_lists[key] = len(tree_bonus_lists)
+                tree_bonus_lists.append(raw[item_id])
+            item_tree_bonus_map[str(item_id)] = unique_lists[key]
+        return tree_bonus_lists, item_tree_bonus_map
 
     # -- Bonus string table --
 

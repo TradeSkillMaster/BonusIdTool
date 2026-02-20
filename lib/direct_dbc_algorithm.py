@@ -132,10 +132,17 @@ class DirectDBCAlgorithm(Algorithm):
             item.item_level = self._get_midnight_squish_curve_point_value(item.item_level)
         return item.item_level
 
+    _TREE_BONUS_ID = 3524
+
     def _get_bonus_ids(self, item: Item) -> list[int]:
         # Initial pass to handle simple APPLY_BONUS types before sorting
         bonus_ids = []
         for id in item.bonus_ids:
+            if id == self._TREE_BONUS_ID:
+                tree_ids = self._dbc.get_tree_bonus_ids(item.item_id)
+                if tree_ids:
+                    bonus_ids.extend(tree_ids)
+                    continue
             bonuses = self._dbc.item_bonus.get(id)
             if len(bonuses) == 1 and bonuses[0].bonus_type == ItemBonusType.APPLY_BONUS:
                 # The game only follows at most one level of redirection with bonuses

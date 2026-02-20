@@ -138,10 +138,6 @@ class Test:
         for data in GameTestData.from_file("single_bonus_id.txt"):
             default_item_level = algorithm.process_item(data.get_link(0))
             for bonus_id in range(14000):
-                # There's a bug in the DBC where 3524 has a "No Bonus" bonus but in reality is a "Scaling Config"
-                # bonus which acts the same as 7753.
-                if bonus_id == 3524:
-                    bonus_id = 7753
                 item_level = algorithm.process_item(data.get_link(bonus_id))
                 expected = data.get_value(bonus_id, default_item_level)
                 if item_level != expected:

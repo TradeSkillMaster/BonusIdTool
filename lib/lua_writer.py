@@ -245,28 +245,11 @@ def write_lua(addon_data: dict[str, Any], path: str, crlf: bool = False) -> None
     squish_max = max(float(k) for k in addon_data["curves"][squish_index])
     squish_max_lua = int(squish_max) if squish_max == int(squish_max) else squish_max
 
-    # Item levels (compressed with loops via helper function to avoid Lua 5.1's
-    # SHRT_MAX limit on local variable registrations per chunk)
-    item_levels = addon_data.get('item_levels', {})
-    sorted_item_ids = sorted(item_levels.keys(), key=int)
-    item_entries = [(int(k), item_levels[k]) for k in sorted_item_ids]
-    item_segments = _find_runs(item_entries)
-
-    lines.append('local items = {}')
-    lines.append('local function SetItemRange(lo, hi, level) for i = lo, hi do items[i] = level end end')
-    for seg in item_segments:
-        if seg[0] == 'single':
-            _, iid, val = seg
-            lines.append(f'items[{iid}] = {_lua_value(val)}')
-        else:
-            _, start, end, base_val, varying = seg
-            template = _lua_value(base_val, varying)
-            if varying:
-                # Linear pattern — must use inline for loop (i is the loop variable)
-                lines.append(f'for i = {start}, {end} do items[i] = {template} end')
-            else:
-                # Constant value — use helper to avoid local variable limit
-                lines.append(f'SetItemRange({start}, {end}, {template})')
+    # Item levels (range-based: two parallel arrays for binary search lookup)
+    item_range_starts = addon_data.get('item_range_starts', [])
+    item_range_levels = addon_data.get('item_range_levels', [])
+    lines.append(f'local itemRangeStarts = {_lua_value(item_range_starts)}')
+    lines.append(f'local itemRangeLevels = {_lua_value(item_range_levels)}')
 
     # Midnight items (hash set with loop compression for consecutive IDs)
     midnight = addon_data.get('midnight_items', [])
@@ -285,6 +268,29 @@ def write_lua(addon_data: dict[str, Any], path: str, crlf: bool = False) -> None
                     lines.append(f'midnightItems[{midnight[k]}] = true')
             i = j
 
+    # Item tree bonuses (deduplicated lists + compressed index map)
+    tree_bonus_lists = addon_data.get('tree_bonus_lists', [])
+    lines.append('local treeBonusLists = {')
+    for lst in tree_bonus_lists:
+        lines.append('\t' + _lua_value(lst) + ',')
+    lines.append('}')
+
+    item_tree_bonuses = addon_data.get('item_tree_bonuses', {})
+    sorted_tree_ids = sorted(item_tree_bonuses.keys(), key=int)
+    # Store 1-based indices for Lua
+    tree_entries = [(int(k), item_tree_bonuses[k] + 1) for k in sorted_tree_ids]
+    tree_segments = _find_runs(tree_entries)
+
+    lines.append('local itemTreeBonuses = {}')
+    for seg in tree_segments:
+        if seg[0] == 'single':
+            _, iid, val = seg
+            lines.append(f'itemTreeBonuses[{iid}] = {_lua_value(val)}')
+        else:
+            _, start, end, base_val, varying = seg
+            template = _lua_value(base_val, varying)
+            lines.append(f'for i = {start}, {end} do itemTreeBonuses[i] = {template} end')
+
     # Bonus string precomputed lookup table
     lines.append(f'local levelToBonusString = {_lua_value(addon_data["level_to_bonus_string"])}')
 
@@ -298,8 +304,11 @@ def write_lua(addon_data: dict[str, Any], path: str, crlf: bool = False) -> None
     lines.append('\tbonuses = bonuses,')
     lines.append('\tcurves = curves,')
     lines.append('\tcontentTuning = contentTuning,')
-    lines.append('\titems = items,')
+    lines.append('\titemRangeStarts = itemRangeStarts,')
+    lines.append('\titemRangeLevels = itemRangeLevels,')
     lines.append('\tmidnightItems = midnightItems,')
+    lines.append('\ttreeBonusLists = treeBonusLists,')
+    lines.append('\titemTreeBonuses = itemTreeBonuses,')
     lines.append('\tlevelToBonusString = levelToBonusString,')
     lines.append('})')
 
@@ -342,9 +351,14 @@ def _to_cbor_data(addon_data: dict[str, Any]) -> dict[str | int, Any]:
         if dst_int in content_tuning:
             content_tuning[int(src)] = content_tuning[dst_int]
 
-    items = {int(k): v for k, v in addon_data.get('item_levels', {}).items()}
+    item_range_starts = addon_data.get('item_range_starts', [])
+    item_range_levels = addon_data.get('item_range_levels', [])
     midnight = {mid: True for mid in addon_data.get('midnight_items', [])}
     squish_idx = addon_data['squish_curve']
+
+    tree_bonus_lists = addon_data.get('tree_bonus_lists', [])
+    # Store 1-based indices for Lua
+    item_tree_bonuses = {int(k): v + 1 for k, v in addon_data.get('item_tree_bonuses', {}).items()}
 
     return {
         'version': ADDON_DATA_VERSION,
@@ -354,8 +368,11 @@ def _to_cbor_data(addon_data: dict[str, Any]) -> dict[str | int, Any]:
         'bonuses': bonuses,
         'curves': curves,
         'contentTuning': content_tuning,
-        'items': items,
+        'itemRangeStarts': item_range_starts,
+        'itemRangeLevels': item_range_levels,
         'midnightItems': midnight,
+        'treeBonusLists': tree_bonus_lists,
+        'itemTreeBonuses': item_tree_bonuses,
         'levelToBonusString': {int(k): v for k, v in addon_data['level_to_bonus_string'].items()},
     }
 

@@ -272,6 +272,15 @@ class ConditionalContentTuning(DBCTypeOneToMany):
     RedirectEnum: int
     ParentContentTuningID: DBCTypeOneToMany.Index
 
+class ItemXBonusTree(DBCTypeOneToMany):
+    ItemBonusTreeID: int
+    ItemID: DBCTypeOneToMany.Index
+
+class ItemBonusTreeNode(DBCTypeOneToMany):
+    ItemContext: int
+    ChildItemBonusListID: int
+    ParentItemBonusTreeID: DBCTypeOneToMany.Index
+
 class ItemSquishEra(DBCTypeOneToOne):
     Patch: int
     CurveID: int
@@ -314,6 +323,12 @@ class ItemSparseDBC(DBCFileOneToOne[ItemSparse]):
         item_sparse = self.get(item_id)
         return (item_sparse.ItemLevel, item_sparse.ItemSquishEraID == 2)
 
+class ItemXBonusTreeDBC(DBCFileOneToMany[ItemXBonusTree]):
+    EntryType = ItemXBonusTree
+
+class ItemBonusTreeNodeDBC(DBCFileOneToMany[ItemBonusTreeNode]):
+    EntryType = ItemBonusTreeNode
+
 class ItemSquishEraDBC(DBCFileOneToOne[ItemSquishEra]):
     EntryType = ItemSquishEra
 
@@ -328,10 +343,12 @@ class DBC:
         self._curve = None
         self._curve_point = None
         self._item_bonus = None
+        self._item_bonus_tree_node = None
         self._item_offset_curve = None
         self._item_scaling_config = None
         self._item_sparse = None
         self._item_squish_era = None
+        self._item_x_bonus_tree = None
 
     @property
     def conditional_content_tuning(self) -> ConditionalContentTuningDBC:
@@ -382,7 +399,27 @@ class DBC:
         return self._item_sparse
 
     @property
+    def item_bonus_tree_node(self) -> ItemBonusTreeNodeDBC:
+        if not self._item_bonus_tree_node:
+            self._item_bonus_tree_node = ItemBonusTreeNodeDBC(self._build)
+        return self._item_bonus_tree_node
+
+    @property
     def item_squish_era(self) -> ItemSquishEraDBC:
         if not self._item_squish_era:
             self._item_squish_era = ItemSquishEraDBC(self._build)
         return self._item_squish_era
+
+    @property
+    def item_x_bonus_tree(self) -> ItemXBonusTreeDBC:
+        if not self._item_x_bonus_tree:
+            self._item_x_bonus_tree = ItemXBonusTreeDBC(self._build)
+        return self._item_x_bonus_tree
+
+    def get_tree_bonus_ids(self, item_id: int) -> list[int]:
+        bonus_ids = []
+        for entry in self.item_x_bonus_tree.get(item_id):
+            for node in self.item_bonus_tree_node.get(entry.ItemBonusTreeID):
+                if node.ItemContext == 0 and node.ChildItemBonusListID:
+                    bonus_ids.append(node.ChildItemBonusListID)
+        return bonus_ids

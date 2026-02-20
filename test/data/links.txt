@@ -31167,3 +31167,4 @@
 98,|cnIQ2:|Hitem:244485::::::::80:262::135:4:12265:6652:10844:3171:1:28:3008:::::|h[Worn Shadowguard Blade's Jerkin]|h|r
 98,|cnIQ2:|Hitem:244493::::::::80:262::135:4:12265:6652:10844:3171:1:28:3008:::::|h[Worn Shadowguard Striker's Brigandine]|h|r
 100,|cnIQ3:|Hitem:244501::::::::80:262::136:5:12267:6652:10844:3178:10254:1:28:3008:::::|h[Worn Shadowguard Captain's Breastplate]|h|r
+76,|cnIQ3:|Hitem:194893::::::::::::1:3524::::::|h[Overseer's Writhebark Stave]|h|r

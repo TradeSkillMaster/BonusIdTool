@@ -1,3 +1,4 @@
+import bisect
 import json
 import os
 from math import floor, inf
@@ -19,8 +20,11 @@ class AddonDataAlgorithm(Algorithm):
         self._squish_curve_index = data['squish_curve']
         self._squish_max = data['squish_max']
         self._content_tuning = data['content_tuning']
-        self._item_levels = data.get('item_levels', {})
+        self._item_range_starts = data.get('item_range_starts', [])
+        self._item_range_levels = data.get('item_range_levels', [])
         self._midnight_items = set(data.get('midnight_items', []))
+        self._tree_bonus_lists = data.get('tree_bonus_lists', [])
+        self._item_tree_bonuses = data.get('item_tree_bonuses', {})
         # Expand CT remap: add entries pointing non-canonical IDs to canonical data
         for src, dst in data.get('content_tuning_remap', {}).items():
             dst_str = str(dst)
@@ -28,7 +32,8 @@ class AddonDataAlgorithm(Algorithm):
                 self._content_tuning[str(src)] = self._content_tuning[dst_str]
 
     def _get_item_info(self, item_id: int) -> tuple[int, bool]:
-        base_level = self._item_levels.get(str(item_id), 0)
+        idx = bisect.bisect_right(self._item_range_starts, item_id) - 1
+        base_level = self._item_range_levels[idx] if idx >= 0 else 0
         has_midnight = item_id in self._midnight_items
         return base_level, has_midnight
 
@@ -111,9 +116,16 @@ class AddonDataAlgorithm(Algorithm):
             item.item_level = self._get_squish_value(item.item_level)
         return item.item_level
 
+    _TREE_BONUS_ID = 3524
+
     def _get_bonus_ids(self, item: Item) -> list[int]:
         bonus_ids = []
         for id in item.bonus_ids:
+            if id == self._TREE_BONUS_ID:
+                list_index = self._item_tree_bonuses.get(str(item.item_id))
+                if list_index is not None:
+                    bonus_ids.extend(self._tree_bonus_lists[list_index])
+                    continue
             data = self._bonuses.get(str(id))
             if data and 'redirect' in data:
                 bonus_ids.append(data['redirect'])
