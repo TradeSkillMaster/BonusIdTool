@@ -387,12 +387,14 @@ def write_lua_cbor(addon_data: dict[str, Any], path: str, crlf: bool = False) ->
 
     build = addon_data["build"]
     lines = [
+        '---@diagnostic disable',
         f'local DATA_VERSION = {ADDON_DATA_VERSION}',
         f'local BUILD = "{build}"',
         'local Lib = LibStub("LibBonusId") ---@type LibBonusId',
         'if not Lib.ShouldLoadData(DATA_VERSION, BUILD) then return end',
         f'local DATA = "{b64}"',
         'Lib.LoadData(C_EncodingUtil.DeserializeCBOR(C_EncodingUtil.DecompressString(C_EncodingUtil.DecodeBase64(DATA))))',
+        '---@diagnostic enable',
     ]
 
     newline = '\r\n' if crlf else '\n'
