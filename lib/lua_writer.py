@@ -9,7 +9,7 @@ from typing import Any
 
 import cbor2
 
-ADDON_DATA_VERSION = 1
+ADDON_DATA_VERSION = 2
 
 _LUA_KEYWORDS = frozenset({
     'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for',
@@ -268,6 +268,22 @@ def write_lua(addon_data: dict[str, Any], path: str, crlf: bool = False) -> None
                     lines.append(f'midnightItems[{midnight[k]}] = true')
             i = j
 
+    # Tooltip-only bonuses (hash set with loop compression for consecutive IDs)
+    tooltip = addon_data.get('tooltip_bonuses', [])
+    lines.append('local tooltipBonuses = {}')
+    if tooltip:
+        i = 0
+        while i < len(tooltip):
+            j = i + 1
+            while j < len(tooltip) and tooltip[j] == tooltip[j - 1] + 1:
+                j += 1
+            if j - i >= 3:
+                lines.append(f'for i = {tooltip[i]}, {tooltip[j - 1]} do tooltipBonuses[i] = true end')
+            else:
+                for k in range(i, j):
+                    lines.append(f'tooltipBonuses[{tooltip[k]}] = true')
+            i = j
+
     # Item tree bonuses (deduplicated lists + compressed index map)
     tree_bonus_lists = addon_data.get('tree_bonus_lists', [])
     lines.append('local treeBonusLists = {')
@@ -307,6 +323,7 @@ def write_lua(addon_data: dict[str, Any], path: str, crlf: bool = False) -> None
     lines.append('\titemRangeStarts = itemRangeStarts,')
     lines.append('\titemRangeLevels = itemRangeLevels,')
     lines.append('\tmidnightItems = midnightItems,')
+    lines.append('\ttooltipBonuses = tooltipBonuses,')
     lines.append('\ttreeBonusLists = treeBonusLists,')
     lines.append('\titemTreeBonuses = itemTreeBonuses,')
     lines.append('\tlevelToBonusString = levelToBonusString,')
@@ -354,6 +371,7 @@ def _to_cbor_data(addon_data: dict[str, Any]) -> dict[str | int, Any]:
     item_range_starts = addon_data.get('item_range_starts', [])
     item_range_levels = addon_data.get('item_range_levels', [])
     midnight = {mid: True for mid in addon_data.get('midnight_items', [])}
+    tooltip = {bid: True for bid in addon_data.get('tooltip_bonuses', [])}
     squish_idx = addon_data['squish_curve']
 
     tree_bonus_lists = addon_data.get('tree_bonus_lists', [])
@@ -371,6 +389,7 @@ def _to_cbor_data(addon_data: dict[str, Any]) -> dict[str | int, Any]:
         'itemRangeStarts': item_range_starts,
         'itemRangeLevels': item_range_levels,
         'midnightItems': midnight,
+        'tooltipBonuses': tooltip,
         'treeBonusLists': tree_bonus_lists,
         'itemTreeBonuses': item_tree_bonuses,
         'levelToBonusString': {int(k): v for k, v in addon_data['level_to_bonus_string'].items()},

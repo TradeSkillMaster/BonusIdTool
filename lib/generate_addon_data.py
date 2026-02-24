@@ -31,6 +31,20 @@ class AddonDataGenerator:
         ItemBonusType.STAT_FIXED, ItemBonusType.APPLY_BONUS,
     }
 
+    # Bonus types that visibly affect the item tooltip but not item level
+    _TOOLTIP_TYPES = {
+        ItemBonusType.INCREASE_BONUS_STAT, ItemBonusType.SET_ITEM_QUALITY,
+        ItemBonusType.ADD_TOOLTIP_LINE, ItemBonusType.NAME_SUFFIX,
+        ItemBonusType.ADD_SOCKETS, ItemBonusType.SET_APPEARANCE_MODIFIER,
+        ItemBonusType.SET_BIND_TYPE, ItemBonusType.SET_REQUIRED_LEVEL,
+        ItemBonusType.ITEM_EFFECT_ID, ItemBonusType.MODIFIED_CRAFTING_STAT,
+        ItemBonusType.REQ_LEVEL_CURVE, ItemBonusType.ICON_FILE_DATA_ID,
+        ItemBonusType.ITEM_DESCRIPTION, ItemBonusType.ITEM_NAME_DESCRIPTION_ID,
+        ItemBonusType.ITEM_LIMIT_CATEGORY_ID, ItemBonusType.PVP_ITEM_LEVEL_INCREMENT,
+        ItemBonusType.CONVERSION_ID, ItemBonusType.PVP_ITEM_LEVEL,
+        ItemBonusType.COSMETIC_SLOT, ItemBonusType.OVERRIDE_DESCRIPTION_COLOR,
+    }
+
     def __init__(self, dbc: DBC):
         self._dbc = dbc
 
@@ -53,6 +67,7 @@ class AddonDataGenerator:
         content_tuning = self._build_content_tuning()
         ct_remap_int = self._dedup_content_tuning(bonuses, content_tuning)
 
+        tooltip_bonuses = self._build_tooltip_bonuses(bonuses)
         item_range_starts, item_range_levels, midnight_items = self._build_item_data()
         tree_bonus_lists, item_tree_bonus_map = self._build_item_tree_bonuses()
         logging.info("Item data: %d ranges (%d items), %d midnight items, %d tree bonus items (%d unique lists)",
@@ -73,6 +88,7 @@ class AddonDataGenerator:
             "item_range_starts": item_range_starts,
             "item_range_levels": item_range_levels,
             "midnight_items": midnight_items,
+            "tooltip_bonuses": tooltip_bonuses,
             "tree_bonus_lists": tree_bonus_lists,
             "item_tree_bonuses": item_tree_bonus_map,
             "level_to_bonus_string": level_to_bonus_string,
@@ -80,7 +96,7 @@ class AddonDataGenerator:
         if ct_remap_int:
             addon_data["content_tuning_remap"] = ct_remap_int
 
-        logging.info("Bonuses: %d bonus list IDs", len(bonuses))
+        logging.info("Bonuses: %d bonus list IDs, %d tooltip-only", len(bonuses), len(tooltip_bonuses))
         logging.info("Curves: %d curves (%d total points)",
                      len(curves_list), sum(len(v) for v in curves_list))
         logging.info("Squish curve: index %d", squish_curve_index)
@@ -486,6 +502,23 @@ class AddonDataGenerator:
         logging.info("CT dedup: removed %d duplicate entries (%d remaining), remap table: %d entries",
                      len(ct_remap), len(content_tuning), len(ct_remap_int))
         return ct_remap_int
+
+    # -- Tooltip bonuses --
+
+    def _build_tooltip_bonuses(self, bonuses: dict[str, Any]) -> list[int]:
+        """Build sorted list of bonus IDs with visible tooltip effects but no item level effect.
+
+        These are bonus IDs not already tracked in the bonuses dict (which covers item level)
+        but that visibly change the item tooltip (stats, quality, sockets, name, etc.).
+        """
+        tooltip = []
+        for parent_id, entries in self._dbc.item_bonus._entries.items():
+            if str(parent_id) in bonuses:
+                continue
+            if any(e.bonus_type in self._TOOLTIP_TYPES for e in entries):
+                tooltip.append(parent_id)
+        tooltip.sort()
+        return tooltip
 
     # -- Item data --
 
