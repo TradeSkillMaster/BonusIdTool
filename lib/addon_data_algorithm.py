@@ -95,7 +95,7 @@ class AddonDataAlgorithm(Algorithm):
                 item.item_level = bonus['item_level']
             elif op == 'scale':
                 drop_level = bonus.get('default_level') or item.modifier_player_level or 80
-                if 'content_tuning_key' in bonus:
+                if not bonus.get('default_level') and 'content_tuning_key' in bonus:
                     ct = item.modifier_content_tuning_id or bonus.get('content_tuning_id')
                     if ct and (not bonus.get('content_tuning_default_only') or not item.modifier_player_level):
                         drop_level = self._apply_content_tuning(drop_level, ct, bonus['content_tuning_key'])

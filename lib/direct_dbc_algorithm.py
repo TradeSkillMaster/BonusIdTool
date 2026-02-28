@@ -64,7 +64,7 @@ class DirectDBCAlgorithm(Algorithm):
                     continue
                 offset_entry = self._dbc.item_offset_curve.get(scaling_entry.ItemOffsetCurveID)
                 scaled_item_level = scaling_entry.ItemLevel if scaling_entry.ItemLevel else (item.modifier_player_level or 80)
-                if item.modifier_content_tuning_id and scaling_entry.ItemSquishEraID == 2:
+                if not scaling_entry.ItemLevel and item.modifier_content_tuning_id and scaling_entry.ItemSquishEraID == 2:
                     scaled_item_level = self._apply_content_tuning(scaled_item_level, item.modifier_content_tuning_id, bonus_type=bonus.bonus_type)
                 item.item_level = self._get_curve_point_value(offset_entry.CurveID, scaled_item_level) + offset_entry.Offset
                 if scaling_entry.ItemSquishEraID != 1 or scaling_entry.Flags & 1:

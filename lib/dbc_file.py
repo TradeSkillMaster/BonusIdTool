@@ -257,6 +257,7 @@ class ItemOffsetCurve(DBCTypeOneToOne):
 class ItemScalingConfig(DBCTypeOneToOne):
     ItemOffsetCurveID: int
     ItemLevel: int
+    RequiredLevel: int
     ItemSquishEraID: int
     Flags: int
 

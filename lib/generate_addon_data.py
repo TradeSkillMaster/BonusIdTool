@@ -713,8 +713,10 @@ class AddonDataGenerator:
                         (f"2:{set_bid}:{add_bid}", combo_clean))
 
         # Build final lookup: prefer clean, fall back to SET_ITEM_QUALITY
+        all_candidate_levels = set(direct_candidates.keys()) | set(combo_candidates.keys())
+        max_level = max(all_candidate_levels) if all_candidate_levels else 170
         level_to_bonus_string = {}
-        for level in range(1, 171):
+        for level in range(1, max_level + 1):
             candidates = direct_candidates.get(level, []) + combo_candidates.get(level, [])
             clean = [s for s, c in candidates if c]
             if clean:
@@ -725,7 +727,7 @@ class AddonDataGenerator:
                 level_to_bonus_string[level] = fallback[0]
 
         logging.info("Bonus string data: %d/%d levels covered (%d clean, %d fallback)",
-                     len(level_to_bonus_string), 170,
+                     len(level_to_bonus_string), max_level,
                      sum(1 for l in level_to_bonus_string
                          if any(c for s, c in direct_candidates.get(l, []) + combo_candidates.get(l, [])
                                 if s == level_to_bonus_string[l])),
