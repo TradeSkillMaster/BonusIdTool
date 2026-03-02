@@ -6,7 +6,7 @@ let calculator = null;
 
 const EXAMPLES = [
     { label: 'Scaled item (Midnight)', link: '|cnIQ3:|Hitem:258912::::::::83:103::134:3:13613:6652:13578:2:9:90:28:4281::::|h[Tarnished Dawnlit Spellbinder\'s Robe]|h|r' },
-    { label: 'Crafted item', link: '|cnIQ3:|Hitem:222416::::::::80:103::3:4:11109:8960:11300:8793:2:9:80:28:2437::::|h[Weavercloth Vestments]|h|r' },
+    { label: 'TWW dungeon drop', link: '|cnIQ3:|Hitem:244501::::::::80:262::136:5:12267:6652:10844:3178:10254:1:28:3008:::::|h[Worn Shadowguard Captain\'s Breastplate]|h|r' },
 ];
 
 async function init() {
