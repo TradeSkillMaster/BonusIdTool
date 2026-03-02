@@ -31169,3 +31169,5 @@
 100,|cnIQ3:|Hitem:244501::::::::80:262::136:5:12267:6652:10844:3178:10254:1:28:3008:::::|h[Worn Shadowguard Captain's Breastplate]|h|r
 76,|cnIQ3:|Hitem:194893::::::::::::1:3524::::::|h[Overseer's Writhebark Stave]|h|r
 180,|cnIQ2:|Hitem:244617::::::::80:262::13:3:12252:12251:12498:3:28:3615:38:4:40:4061:::::|h[Skinner's Cap |A:Professions-ChatIcon-Quality-Tier1:17:15::1|a]|h|r
+180,|cnIQ2:|Hitem:244713::::::::::::3:12252:12251:12498:4:28:3615:29:81:38:4:40:2786:::::|h[Farstrider Clampers]|h|r
+192,|cnIQ2:|Hitem:258941:::::::::::133:2:13729:13578:2:9:90:28:3321:::::|h[Tarnished Dawnlit Commander's Mantle]|h|r

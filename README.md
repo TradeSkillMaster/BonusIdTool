@@ -112,6 +112,7 @@ This tool was created by Sapu, but was only made possible with the help of:
 
 ## Related
 
+- [Item Level Calculator](https://tradeskillmaster.github.io/BonusIdTool/) — Interactive web tool that explains step-by-step how any item's level is calculated from its bonus IDs
 - [LibBonusId](https://github.com/TradeSkillMaster/LibBonusId) — WoW addon library that consumes the generated addon data to compute item levels client-side
 
 ## License

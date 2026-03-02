@@ -829,6 +829,16 @@ class AddonDataGenerator:
             paths.append(lua_addon_path)
         else:
             logging.info("Skipping %s (directory not found)", lua_addon_path)
+
+        web_data_dir = os.path.join('docs', 'data')
+        if os.path.isdir(web_data_dir):
+            web_json_path = os.path.join(web_data_dir, 'addon_data.json')
+            with open(web_json_path, 'w') as f:
+                json.dump(addon_data, f, separators=(',', ':'))
+            paths.append(web_json_path)
+        else:
+            logging.info("Skipping %s (directory not found)", web_data_dir)
+
         logging.info("Wrote addon data to %s", ', '.join(paths))
         return paths
 

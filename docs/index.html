@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WoW Item Level Calculator</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <header>
+        <h1>WoW Item Level Calculator</h1>
+        <p id="build-info">Loading data...</p>
+    </header>
+    <main>
+        <section id="input-section">
+            <label for="link-input">Paste an item link or itemstring:</label>
+            <div class="input-row">
+                <input type="text" id="link-input" placeholder="|Hitem:258912::::::::::::3:13613:6652:13578:2:9:90:28:4281::::" />
+                <button id="calc-btn">Calculate</button>
+            </div>
+            <div id="parse-error" class="error hidden"></div>
+            <div id="examples">
+                <p>Examples:</p>
+                <ul id="examples-list"></ul>
+            </div>
+        </section>
+        <section id="result-section" class="hidden">
+            <div id="parsed-info"></div>
+            <details id="step-details" open>
+                <summary>Step-by-Step Calculation</summary>
+                <div id="steps-container"></div>
+            </details>
+            <div id="result-summary">
+                <span class="label">Final Item Level</span>
+                <span id="result-level" class="level-value"></span>
+            </div>
+        </section>
+    </main>
+    <footer>
+        <a href="https://github.com/TradeSkillMaster/BonusIdTool">GitHub</a>
+    </footer>
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
