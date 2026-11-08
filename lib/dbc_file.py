@@ -28,8 +28,8 @@ def download_csv(table_name: str, build: str) -> list[dict[str,str]]:
     return list(DictReader(data.splitlines(), delimiter=','))
 
 
-def get_latest_build() -> str:
-    res = requests.get("https://wago.tools/api/builds/wow/latest")
+def get_latest_build(product: str = 'wow') -> str:
+    res = requests.get(f"https://wago.tools/api/builds/{product}/latest")
     res.raise_for_status()
     return res.json()["version"]
 
@@ -185,6 +185,9 @@ class ItemBonusType(Enum):
     SCALING_CONFIG_2 = 51
     CRAFTING_QUALITY = 52
     MIDNIGHT_ITEM_LEVEL = 53
+    UNKNOWN_5 = 54
+    UNKNOWN_6 = 55
+    UNKNOWN_7 = 56
 
     @property
     def sort_priority(self) -> int:

@@ -18,13 +18,15 @@ All commands default to the latest retail build from [wago.tools](https://wago.t
 ### Generate addon data
 
 ```bash
-python bonus_id_tool.py generate [build]
+python bonus_id_tool.py generate [build] [--product wow|wowf]
 ```
 
 Fetches DBC data for the given build, computes all bonus ID effects, and writes:
 - `.cache/<build>/addon_data.json` — full addon data as JSON
 - `.cache/<build>/addon_data.lua` — Lua table format
-- `../LibBonusId/Data.lua` — CBOR-encoded Lua for the addon (only if `../LibBonusId/` exists)
+- `../LibBonusId/Data.lua` (`wow`) or `../LibBonusId/DataForever.lua` (`wowf`) — CBOR-encoded Lua for the addon (only if `../LibBonusId/` exists)
+
+`--product wowf` generates data for WoW Forever, whose builds have no item level scaling tables. It only contains the bonus IDs that have an effect (used to filter bonus IDs) and the bonus tree data, so LibBonusId can't calculate item levels from it.
 
 ### Run tests
 

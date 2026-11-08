@@ -10,6 +10,8 @@ _G.sort = table.sort
 _G.tinsert = table.insert
 _G.tremove = table.remove
 _G.wipe = function(t) for i in pairs(t) do t[i] = nil end end
+_G.WOW_PROJECT_MAINLINE = 1
+_G.WOW_PROJECT_ID = WOW_PROJECT_MAINLINE
 function GetBuildInfo()
     return "12.0.1", "65893"
 end
