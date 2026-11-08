@@ -9,7 +9,7 @@ from typing import Any
 
 import cbor2
 
-ADDON_DATA_VERSION = 2
+ADDON_DATA_VERSION = 3
 
 _LUA_KEYWORDS = frozenset({
     'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for',
@@ -193,9 +193,10 @@ def write_lua(addon_data: dict[str, Any], path: str, crlf: bool = False) -> None
     # Early-out if we shouldn't load this data
     build = addon_data["build"]
     lines.append(f'local DATA_VERSION = {ADDON_DATA_VERSION}')
+    lines.append(f'local PRODUCT = "{addon_data["product"]}"')
     lines.append(f'local BUILD = "{build}"')
     lines.append('local Lib = LibStub("LibBonusId") ---@type LibBonusId')
-    lines.append('if not Lib.ShouldLoadData(DATA_VERSION, BUILD) then return end')
+    lines.append('if not Lib.ShouldLoadData(DATA_VERSION, PRODUCT, BUILD) then return end')
 
     # Bonuses (compressed with loops)
     sorted_bonus_ids = sorted(addon_data['bonuses'].keys(), key=int)
@@ -241,9 +242,13 @@ def write_lua(addon_data: dict[str, Any], path: str, crlf: bool = False) -> None
     lines.append('}')
 
     squish_index = addon_data["squish_curve"]
-    lines.append(f'local squishCurve = curves[{squish_index + 1}]')
-    squish_max = max(float(k) for k in addon_data["curves"][squish_index])
-    squish_max_lua = int(squish_max) if squish_max == int(squish_max) else squish_max
+    if squish_index is None:
+        lines.append('local squishCurve = {}')
+        squish_max_lua = 0
+    else:
+        lines.append(f'local squishCurve = curves[{squish_index + 1}]')
+        squish_max = max(float(k) for k in addon_data["curves"][squish_index])
+        squish_max_lua = int(squish_max) if squish_max == int(squish_max) else squish_max
 
     # Item levels (range-based: two parallel arrays for binary search lookup)
     item_range_starts = addon_data.get('item_range_starts', [])
@@ -313,6 +318,7 @@ def write_lua(addon_data: dict[str, Any], path: str, crlf: bool = False) -> None
     # Pass data to LibBonusId
     lines.append('Lib.LoadData({')
     lines.append('\tversion = DATA_VERSION,')
+    lines.append('\tproduct = PRODUCT,')
     lines.append('\tbuild = BUILD,')
 
     lines.append(f'\tsquishMax = {squish_max_lua},')
@@ -380,9 +386,10 @@ def _to_cbor_data(addon_data: dict[str, Any]) -> dict[str | int, Any]:
 
     return {
         'version': ADDON_DATA_VERSION,
+        'product': addon_data['product'],
         'build': addon_data['build'],
         'squishMax': addon_data['squish_max'],
-        'squishCurve': curves[squish_idx],
+        'squishCurve': curves[squish_idx] if squish_idx is not None else {},
         'bonuses': bonuses,
         'curves': curves,
         'contentTuning': content_tuning,
@@ -408,9 +415,10 @@ def write_lua_cbor(addon_data: dict[str, Any], path: str, crlf: bool = False) ->
     lines = [
         '---@diagnostic disable',
         f'local DATA_VERSION = {ADDON_DATA_VERSION}',
+        f'local PRODUCT = "{addon_data["product"]}"',
         f'local BUILD = "{build}"',
         'local Lib = LibStub("LibBonusId") ---@type LibBonusId',
-        'if not Lib.ShouldLoadData(DATA_VERSION, BUILD) then return end',
+        'if not Lib.ShouldLoadData(DATA_VERSION, PRODUCT, BUILD) then return end',
         f'local DATA = "{b64}"',
         'Lib.LoadData(C_EncodingUtil.DeserializeCBOR(C_EncodingUtil.DecompressString(C_EncodingUtil.DecodeBase64(DATA))))',
         '---@diagnostic enable',

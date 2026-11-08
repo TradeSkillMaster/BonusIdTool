@@ -4,12 +4,13 @@ import argparse
 import logging
 
 from lib.dbc_file import get_latest_build
+from lib.generate_addon_data import PRODUCT_DATA_FILES
 
 
 def cmd_generate(args):
     from lib.dbc_file import DBC
     from lib.generate_addon_data import AddonDataGenerator
-    generator = AddonDataGenerator(DBC(args.build))
+    generator = AddonDataGenerator(DBC(args.build), args.product)
     addon_data = generator.generate()
     AddonDataGenerator.write(addon_data, args.build)
 
@@ -71,6 +72,7 @@ def main():
 
     p_generate = subparsers.add_parser('generate', help='Generate addon data (JSON + Lua) from DBC files')
     p_generate.add_argument('build', nargs='?', default='latest', help='Game build version (default: latest)')
+    p_generate.add_argument('-p', '--product', choices=list(PRODUCT_DATA_FILES), default='wow', help='Game product (default: wow)')
     p_generate.set_defaults(func=cmd_generate)
 
     p_test = subparsers.add_parser('test', help='Run tests comparing algorithm output against game data')
@@ -104,7 +106,7 @@ def main():
     )
 
     if args.build.lower() == 'latest':
-        args.build = get_latest_build()
+        args.build = get_latest_build(getattr(args, 'product', 'wow'))
 
     args.func(args)
 

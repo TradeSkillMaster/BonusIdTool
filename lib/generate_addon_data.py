@@ -8,6 +8,11 @@ from typing import Any
 from lib.dbc_file import CurveType, DBC, ItemBonus, ItemBonusType
 from lib.lua_writer import write_lua, write_lua_cbor
 
+PRODUCT_DATA_FILES = {
+    'wow': 'Data.lua',
+    'wowf': 'DataForever.lua',
+}
+
 
 class AddonDataGenerator:
     _OP_GROUP: dict[str, str] = {'scale': 'S', 'set': 'S', 'add': 'Q'}
@@ -45,14 +50,18 @@ class AddonDataGenerator:
         ItemBonusType.COSMETIC_SLOT, ItemBonusType.OVERRIDE_DESCRIPTION_COLOR,
     }
 
-    def __init__(self, dbc: DBC):
+    def __init__(self, dbc: DBC, product: str = 'wow'):
         self._dbc = dbc
+        self._product = product
 
     def generate(self) -> dict[str, Any]:
         """Generate addon data from DBC files.
 
         Returns the addon data dict ready for serialization or further processing.
         """
+        if self._product == 'wowf':
+            return self._generate_filter_data()
+
         bonuses = self._export_bonuses()
         referenced_curve_ids = self._collect_referenced_curves()
         curves = self._export_curves(referenced_curve_ids)
@@ -69,7 +78,7 @@ class AddonDataGenerator:
 
         tooltip_bonuses = self._build_tooltip_bonuses(bonuses)
         item_range_starts, item_range_levels, midnight_items = self._build_item_data()
-        tree_bonus_lists, item_tree_bonus_map = self._build_item_tree_bonuses()
+        tree_bonus_lists, item_tree_bonus_map = self._build_item_tree_bonuses(self._ILEVEL_TYPES)
         logging.info("Item data: %d ranges (%d items), %d midnight items, %d tree bonus items (%d unique lists)",
                      len(item_range_starts), sum(1 for l in item_range_levels if l > 0),
                      len(midnight_items), len(item_tree_bonus_map), len(tree_bonus_lists))
@@ -80,6 +89,7 @@ class AddonDataGenerator:
 
         addon_data: dict[str, Any] = {
             "build": self._dbc._build,
+            "product": self._product,
             "squish_curve": squish_curve_index,
             "squish_max": squish_max,
             "bonuses": bonuses,
@@ -104,6 +114,33 @@ class AddonDataGenerator:
         logging.info("Item data: %d ranges, %d midnight items", len(item_range_starts), len(midnight_items))
 
         return addon_data
+
+    def _generate_filter_data(self) -> dict[str, Any]:
+        """Generate addon data which only supports filtering bonus IDs, for products without item level scaling tables."""
+        effective_types = self._ILEVEL_TYPES | self._TOOLTIP_TYPES
+        effective_bonuses = sorted(
+            parent_id for parent_id, entries in self._dbc.item_bonus._entries.items()
+            if any(e.bonus_type in effective_types for e in entries)
+        )
+        tree_bonus_lists, item_tree_bonus_map = self._build_item_tree_bonuses(effective_types)
+        logging.info("Bonuses: %d effective bonus list IDs, %d tree bonus items (%d unique lists)",
+                     len(effective_bonuses), len(item_tree_bonus_map), len(tree_bonus_lists))
+        return {
+            "build": self._dbc._build,
+            "product": self._product,
+            "squish_curve": None,
+            "squish_max": 0,
+            "bonuses": {},
+            "curves": [],
+            "content_tuning": {},
+            "item_range_starts": [],
+            "item_range_levels": [],
+            "midnight_items": [],
+            "tooltip_bonuses": effective_bonuses,
+            "tree_bonus_lists": tree_bonus_lists,
+            "item_tree_bonuses": item_tree_bonus_map,
+            "level_to_bonus_string": {},
+        }
 
     # -- Bonus export --
 
@@ -570,7 +607,7 @@ class AddonDataGenerator:
 
         return range_starts, range_levels, midnight_items
 
-    def _build_item_tree_bonuses(self) -> tuple[list[list[int]], dict[str, int]]:
+    def _build_item_tree_bonuses(self, effect_types: set[ItemBonusType]) -> tuple[list[list[int]], dict[str, int]]:
         """Build per-item bonus tree mapping for bonus 3524 resolution.
 
         Returns (tree_bonus_lists, item_tree_bonus_map) where:
@@ -595,12 +632,12 @@ class AddonDataGenerator:
                         bonus_ids.append(bid)
             if not bonus_ids:
                 continue
-            has_ilevel = any(
-                e.bonus_type in self._ILEVEL_TYPES
+            has_effect = any(
+                e.bonus_type in effect_types
                 for bid in bonus_ids
                 for e in self._dbc.item_bonus.get(bid)
             )
-            if has_ilevel:
+            if has_effect:
                 raw[item_id] = bonus_ids
 
         # Second pass: deduplicate lists
@@ -823,7 +860,7 @@ class AddonDataGenerator:
 
         paths = [json_path, lua_cache_path]
 
-        lua_addon_path = os.path.join('..', 'LibBonusId', 'Data.lua')
+        lua_addon_path = os.path.join('..', 'LibBonusId', PRODUCT_DATA_FILES[addon_data['product']])
         if os.path.isdir(os.path.dirname(lua_addon_path)):
             write_lua_cbor(addon_data, lua_addon_path, crlf=True)
             paths.append(lua_addon_path)
@@ -831,7 +868,9 @@ class AddonDataGenerator:
             logging.info("Skipping %s (directory not found)", lua_addon_path)
 
         web_data_dir = os.path.join('docs', 'data')
-        if os.path.isdir(web_data_dir):
+        if addon_data['product'] != 'wow':
+            logging.info("Skipping %s (only generated for wow)", web_data_dir)
+        elif os.path.isdir(web_data_dir):
             web_json_path = os.path.join(web_data_dir, 'addon_data.json')
             with open(web_json_path, 'w') as f:
                 json.dump(addon_data, f, separators=(',', ':'))
